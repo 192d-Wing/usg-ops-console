@@ -142,6 +142,6 @@ make wasm-test
 
 This runs the browser tests in `tests/wasm.rs` with wasm-pack, in headless
 Firefox by default (`make wasm-test WASM_BROWSER=chrome` to use Chrome). In
-M2 they passed locally in headless Chrome (16 passed). The CI `wasm-test` job
-(Firefox) has not had a green run yet, so POAM-003 stays open. See
+M2 they passed locally in headless Chrome and in the CI `wasm-test` job
+(headless Firefox, 16 passed, CI run 41740455231), which closed POAM-003. See
 `docs/compliance/POAM.md`.

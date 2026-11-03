@@ -22,7 +22,7 @@ Status values:
 | SI-11 Error handling (scope errors name the key only) | Implemented | M2 |
 | SC-8 Transmission confidentiality (HSTS header) | Partial | M0 |
 | SC-18 / SI-10 Content Security Policy (hash-based) | Partial | M0-M2 |
-| SA-11 Developer testing (wasm-bindgen and E2E jobs) | Partial (pending first green CI run) | M2 |
+| SA-11 Developer testing (wasm-bindgen and E2E jobs) | Implemented | M2 |
 | SA-11(1) Static code analysis (clippy) | Implemented | M0 |
 | SR-3, SR-11, CM-14 Supply chain (pinned actions, images, npm) | Partial | M2 |
 | RA-5 / SI-2 Dependency vulnerability scanning | Partial | M0 |
@@ -64,9 +64,8 @@ Evidence:
 
 - E2E `e2e/tests/dist-smoke.spec.ts` test "release dist: /gallery is NotFound
   (gallery not compiled in)" runs against the release `dist` (gateway on
-  127.0.0.1:8082, `dist-*` Playwright projects). Passed locally on Chromium
-  and WebKit; Firefox not run. `make e2e` is local only; the CI `e2e` job
-  has not had a green run yet (see SA-11).
+  127.0.0.1:8082, `dist-*` Playwright projects). Passed on all three engines
+  in CI run [41740455231](https://github.com/192d-Wing/usg-ops-console/actions/runs/41740455231) (see SA-11).
 
 Limits: the gallery has no authentication. That is acceptable only while it
 stays compiled out of release builds. `make run` serves the gallery bundle and
@@ -247,9 +246,9 @@ The browser E2E evidence is local only until the CI `e2e` job runs green.
 
 ## SA-11 Developer testing and evaluation
 
-**Status: Partial (pending first green CI run).**
+**Status: Implemented.**
 
-`.github/workflows/ci.yml` has two jobs added in M2 that have **never run**:
+`.github/workflows/ci.yml` has two test jobs, first green in CI run [41740455231](https://github.com/192d-Wing/usg-ops-console/actions/runs/41740455231) on commit `0a6f40e`:
 
 - `wasm-test` (comment `POAM-003 / SA-11`): `wasm-pack test --headless
   --firefox crates/console-ui`, uploads artifact `wasm-pack-log`.
@@ -258,10 +257,11 @@ The browser E2E evidence is local only until the CI `e2e` job runs green.
   firefox and webkit plus the `dist-*` smoke projects; uploads artifact
   `playwright-report`.
 
-Local evidence only: `make wasm-test WASM_BROWSER=chrome` 16 passed; `make e2e`
-on chromium, webkit, dist-chromium and dist-webkit 102 passed, 12 skipped (axe
-is Chromium-only by design). Firefox not run. See POAM-003 to POAM-006 and
-POAM-012.
+CI evidence: `wasm-test` (headless Firefox) 16 passed; `e2e` on chromium,
+firefox, webkit and the three `dist-*` projects 147 passed, 24 skipped (axe is
+Chromium-only by design), 0 failed. Local runs (headless Chrome wasm; chromium
+and webkit e2e) agree. POAM-003 to POAM-006 are closed; axe engine scope stays
+open as POAM-012.
 
 ## SA-11(1) Static code analysis
 
@@ -286,9 +286,8 @@ workspace (all targets) and on wasm32 for console-shell (with and without
   `engine-strict=true`. `e2e/package.json` requires Node `>=24`, CI uses Node
   24, and `npm audit --audit-level=high` fails the CI job.
 
-Why only Partial: these are configuration, not tests. The container build with
-the digests and the CI workflow have not been run (podman and CI not run in
-M2). There is no signature or provenance verification, and no automated update
+Why only Partial: these are configuration, not tests. The digest-pinned
+container build and the SHA-pinned workflow ran green in CI run [41740455231](https://github.com/192d-Wing/usg-ops-console/actions/runs/41740455231). There is no signature or provenance verification, and no automated update
 process (Dependabot/Renovate) for the pins.
 
 ## PL-8 Security and privacy architecture: scope
@@ -333,5 +332,5 @@ None of the following has any code yet. Do not cite them as implemented.
 WCAG 2.1 AA colour contrast: test `token_pairs_meet_wcag_aa` in
 `crates/console-ui/tests/contrast.rs` checks 40 declared token pairs in each
 theme against 4.5:1 (text) or 3:1 (UI). axe scans run in
-`e2e/tests/a11y.spec.ts` on Chromium only (0 serious/critical locally); CI
-has not run them yet. See POAM-004 and POAM-012.
+`e2e/tests/a11y.spec.ts` on Chromium only (0 serious/critical locally and
+in CI run [41740455231](https://github.com/192d-Wing/usg-ops-console/actions/runs/41740455231)). See POAM-004 and POAM-012.

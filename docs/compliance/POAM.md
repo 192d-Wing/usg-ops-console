@@ -28,21 +28,27 @@ reports them as 2 allowed warnings (M2 QA run).
 
 ## Verification gaps and deferred findings
 
-### POAM-003 to POAM-006: pending CI verification (NIST-002)
+### POAM-003 to POAM-006: closed by CI verification (NIST-002)
 
-These four items have local evidence, but they are **not closed**. The CI
-`wasm-test` and `e2e` jobs in `.github/workflows/ci.yml` were added in M2 and
-have never run. Firefox (wasm tests and E2E) has not been run anywhere. Close
-each item only after a green CI run of `wasm-test` and `e2e` (all three
-browsers), and record the run ID and the `wasm-pack-log` and
-`playwright-report` artifacts here.
+Closed on 2026-11-03 by CI run
+[41740455231](https://github.com/192d-Wing/usg-ops-console/actions/runs/41740455231)
+on commit `0a6f40e`, with every job green:
 
-| ID | Weakness | Local evidence (M2) | Control / reference | Status | Owner | Milestone |
+- `wasm-test` (headless Firefox): 16 passed, 0 failed. Artifact `wasm-pack-log`.
+- `e2e` (chromium, firefox, webkit, dist-chromium, dist-firefox, dist-webkit):
+  147 passed, 24 skipped (axe is Chromium-only by design), 0 failed.
+  Artifact `playwright-report`.
+- `container build` also succeeded for the first time.
+
+Artifacts are kept for 30 days; the run page and this record are the
+durable evidence.
+
+| ID | Weakness | Evidence | Control / reference | Status | Owner | Milestone |
 | --- | --- | --- | --- | --- | --- | --- |
-| POAM-003 | wasm-bindgen browser tests in `crates/console-ui/tests/wasm.rs` had never been run. | `make wasm-test WASM_BROWSER=chrome`: 16 passed, 0 failed (local headless Chrome). The CI `wasm-test` job runs headless Firefox and has not run yet. | SA-11; WCAG 2.1 | Pending CI verification | TBD | First green CI `wasm-test` run |
-| POAM-004 | No axe accessibility scan had been run (M1 A11Y-009). | `e2e/tests/a11y.spec.ts`: axe (wcag2a/aa, wcag21a/aa) on `/` and `/gallery`, light and dark, at 1280, 600 and 320 px wide; 0 serious/critical on Chromium. **Closure scope: axe runs on Chromium only.** WebKit and Firefox get keyboard coverage (`keyboard.spec.ts`, `reflow.spec.ts`), not axe (see POAM-012). Keyboard specs pass on Chromium and WebKit locally; Firefox not run. | WCAG 2.1 AA | Pending CI verification | TBD | First green CI `e2e` run |
-| POAM-005 | M1 A11Y-007: fixed px sizes instead of tokens; checkbox smaller than the target minimum. | Sizes moved to tokens (`--cui-size-control-check` is 24px, plus border-width and component-size tokens). Test `components_css_has_no_raw_px` (`crates/console-ui/tests/qa_logic_css.rs`) passes. The a11y reviewer marked it ready to close. | WCAG 2.1 SC 1.4.4, 2.5.8 | Pending CI verification | TBD | First green CI `e2e` run |
-| POAM-006 | M1 A11Y-008: side navigation could not be collapsed on narrow screens. | Below 45rem the nav is hidden behind a `NavToggle` disclosure. `keyboard.spec.ts` "side nav at narrow width" and `reflow.spec.ts` (320x640, no horizontal scroll, dropdown panels inside the viewport) pass on Chromium and WebKit. Not run on Firefox. | WCAG 2.1 SC 1.4.10 | Pending CI verification | TBD | First green CI `e2e` run |
+| POAM-003 | wasm-bindgen browser tests in `crates/console-ui/tests/wasm.rs` had never been run. | `make wasm-test WASM_BROWSER=chrome`: 16 passed, 0 failed (local headless Chrome); CI `wasm-test` headless Firefox 16 passed. | SA-11; WCAG 2.1 | Closed — CI run 41740455231, headless Firefox 16 passed | — | M2 |
+| POAM-004 | No axe accessibility scan had been run (M1 A11Y-009). | `e2e/tests/a11y.spec.ts`: axe (wcag2a/aa, wcag21a/aa) on `/` and `/gallery`, light and dark, at 1280, 600 and 320 px wide; 0 serious/critical on Chromium. **Closure scope: axe runs on Chromium only.** WebKit and Firefox get keyboard coverage (`keyboard.spec.ts`, `reflow.spec.ts`), not axe (see POAM-012). Keyboard specs pass on Chromium and WebKit locally and on all three engines in CI. | WCAG 2.1 AA | Closed — CI run 41740455231, e2e green on all three engines | — | M2 |
+| POAM-005 | M1 A11Y-007: fixed px sizes instead of tokens; checkbox smaller than the target minimum. | Sizes moved to tokens (`--cui-size-control-check` is 24px, plus border-width and component-size tokens). Test `components_css_has_no_raw_px` (`crates/console-ui/tests/qa_logic_css.rs`) passes. The a11y reviewer marked it ready to close. | WCAG 2.1 SC 1.4.4, 2.5.8 | Closed — CI run 41740455231, e2e green on all three engines | — | M2 |
+| POAM-006 | M1 A11Y-008: side navigation could not be collapsed on narrow screens. | Below 45rem the nav is hidden behind a `NavToggle` disclosure. `keyboard.spec.ts` "side nav at narrow width" and `reflow.spec.ts` (320x640, no horizontal scroll, dropdown panels inside the viewport) pass on Chromium and WebKit. Also green on Firefox in CI. | WCAG 2.1 SC 1.4.10 | Closed — CI run 41740455231, e2e green on all three engines | — | M2 |
 
 ### Other open items
 
