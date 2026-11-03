@@ -1,0 +1,13 @@
+[package]
+name = "console-ui"
+description = "Yew component library and design tokens for the console and its tools."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+yew.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: fmt + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo clippy -p console-shell --target wasm32-unknown-unknown --locked -- -D warnings
+      - run: cargo test --workspace --locked
+
+  web:
+    name: trunk build + bundle budget
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: jetli/trunk-action@v0.5.0
+      - run: trunk build --release
+        working-directory: crates/console-shell
+      - name: Shell WASM gzip size <= 1.5 MB
+        run: |
+          size=$(gzip -c crates/console-shell/dist/*.wasm | wc -c)
+          echo "wasm gz bytes: $size"
+          test "$size" -le 1572864
+
+  supply-chain:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+
+  container:
+    name: container build
+    runs-on: ubuntu-latest
+    needs: [rust, web]
+    steps:
+      - uses: actions/checkout@v7
+      - run: podman build -f deploy/Containerfile -t usg-ops-console:ci .

@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "console",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": ["run", "-q", "-p", "console-gateway"],
+      "env": { "CONSOLE_LISTEN": "127.0.0.1:8080", "CONSOLE_DIST": "crates/console-shell/dist" },
+      "port": 8080
+    }
+  ]
+}

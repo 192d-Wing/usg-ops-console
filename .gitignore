@@ -1,0 +1,5 @@
+/target
+/dist
+crates/console-shell/dist
+.agent-runs/
+.DS_Store
