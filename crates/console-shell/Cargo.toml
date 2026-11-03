@@ -11,7 +11,7 @@ console-protocol.workspace = true
 console-ui.workspace = true
 yew.workspace = true
 yew-router.workspace = true
-web-sys = { workspace = true, features = ["Window", "Document", "Element", "Storage", "HtmlElement"] }
+web-sys = { workspace = true, features = ["Window", "Document", "Element", "Storage", "HtmlElement", "MediaQueryList", "Location"] }
 
 [lints]
 workspace = true

@@ -79,8 +79,10 @@ pub fn SideNavigation(props: &SideNavigationProps) -> Html {
                             </ul>
                         </li>
                     },
+                    // Decorative: a `role` on an <li> would make it a non-listitem
+                    // child of the <ul> (axe `list`, WCAG 1.3.1).
                     SideNavItem::Divider => html! {
-                        <li class="cui-sidenav__divider" role="separator" key={format!("d{i}")}></li>
+                        <li class="cui-sidenav__divider" aria-hidden="true" key={format!("d{i}")}></li>
                     },
                 }) }
             </ul>
@@ -96,6 +98,7 @@ pub struct BreadcrumbsProps {
 }
 
 /// Breadcrumb trail; the last item is the current page and is not a link.
+/// Items with an empty `href` render as plain text (e.g. a section name).
 #[function_component]
 pub fn Breadcrumbs(props: &BreadcrumbsProps) -> Html {
     let last = props.items.len().saturating_sub(1);
@@ -107,6 +110,14 @@ pub fn Breadcrumbs(props: &BreadcrumbsProps) -> Html {
                         html! {
                             <li class="cui-breadcrumbs__item" key={i}>
                                 <span aria-current="page">{ item.text.clone() }</span>
+                            </li>
+                        }
+                    } else if item.href.is_empty() {
+                        // Grouping crumb with no page of its own: plain text.
+                        html! {
+                            <li class="cui-breadcrumbs__item" key={i}>
+                                <span>{ item.text.clone() }</span>
+                                <span class="cui-breadcrumbs__sep" aria-hidden="true">{ "/" }</span>
                             </li>
                         }
                     } else {

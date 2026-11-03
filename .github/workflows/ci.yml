@@ -21,27 +21,32 @@ jobs:
     name: fmt + clippy + test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
       - run: cargo fmt --all -- --check
+      # SA-11(1): static code analysis (clippy, -D warnings).
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo clippy -p console-shell --target wasm32-unknown-unknown --locked -- -D warnings
+      - run: cargo clippy -p console-shell --target wasm32-unknown-unknown --features gallery --locked -- -D warnings
+      - run: cargo clippy -p console-ui --target wasm32-unknown-unknown --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
 
   web:
     name: trunk build + bundle budget
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           targets: wasm32-unknown-unknown
-      - uses: Swatinem/rust-cache@v2
-      - uses: jetli/trunk-action@v0.5.0
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: jetli/trunk-action@69821d4eec12c308c4b811e459e37556cf920057 # v0.5.0
+        with:
+          version: v0.22.1
       - run: trunk build --release
         working-directory: crates/console-shell
       - name: Release bundle is gallery-free (CM-7)
@@ -51,23 +56,108 @@ jobs:
             echo "release dist contains gallery code (CM-7)"; exit 1
           fi
           echo "release dist is gallery-free"
-      - name: Shell WASM gzip size <= 1.5 MB
+      - name: Shell WASM gzip size <= 1.5 MB; warn > baseline x1.10 (PERF-001)
+        env:
+          WASM_GZ_BASELINE: "141918"  # M2 release baseline; see quality-gates.md
+          WASM_GZ_MAX: "1572864"
         run: |
-          size=$(gzip -c crates/console-shell/dist/*.wasm | wc -c)
-          echo "wasm gz bytes: $size"
-          test "$size" -le 1572864
+          size=$(gzip -c crates/console-shell/dist/*.wasm | wc -c | tr -d ' ')
+          warn=$(( WASM_GZ_BASELINE * 110 / 100 ))
+          echo "wasm gz bytes: $size (baseline $WASM_GZ_BASELINE, warn > $warn, max $WASM_GZ_MAX)"
+          if [ "$size" -gt "$WASM_GZ_MAX" ]; then
+            echo "::error::shell wasm gz $size B exceeds 1.5 MB budget"; exit 1
+          fi
+          if [ "$size" -gt "$warn" ]; then
+            echo "::warning::shell wasm gz $size B is >10% over baseline $WASM_GZ_BASELINE B; justify in plan or update baseline"
+          fi
+
+  wasm-test:
+    # POAM-003 / SA-11: console-ui wasm-bindgen tests in a headless browser.
+    # Firefox + geckodriver ship on the ubuntu-latest runner image.
+    name: console-ui wasm-bindgen tests (headless Firefox)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: jetli/wasm-pack-action@0d096b08b4e5a7de8c28de67e11e945404e9eefa # v0.4.0
+        with:
+          version: v0.15.1
+      - run: wasm-pack test --headless --firefox crates/console-ui 2>&1 | tee wasm-pack.log
+        shell: bash
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: wasm-pack-log
+          path: wasm-pack.log
+          retention-days: 30
+
+  e2e:
+    # Playwright + axe against console-gateway serving dist-gallery, plus dist smoke projects.
+    name: e2e (Playwright chromium/firefox/webkit + axe)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      - uses: jetli/trunk-action@69821d4eec12c308c4b811e459e37556cf920057 # v0.5.0
+        with:
+          version: v0.22.1
+      - run: make web web-gallery gateway
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+      - run: npm ci
+        working-directory: e2e
+      - run: npx tsc --noEmit -p .
+        working-directory: e2e
+      - name: npm audit (fail on high/critical)
+        run: npm audit --audit-level=high
+        working-directory: e2e
+      - name: Playwright version
+        id: pw
+        run: echo "version=$(jq -r '.packages["node_modules/@playwright/test"].version' e2e/package-lock.json)" >> "$GITHUB_OUTPUT"
+      - name: Cache Playwright browsers
+        id: pw-cache
+        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+      - if: steps.pw-cache.outputs.cache-hit != 'true'
+        run: npx playwright install --with-deps chromium firefox webkit
+        working-directory: e2e
+      - if: steps.pw-cache.outputs.cache-hit == 'true'
+        run: npx playwright install-deps chromium firefox webkit
+        working-directory: e2e
+      - run: npx playwright test
+        working-directory: e2e
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: playwright-report
+          path: |
+            e2e/playwright-report
+            e2e/test-results
+          retention-days: 30
 
   supply-chain:
     name: cargo-deny
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2
 
   container:
     name: container build
     runs-on: ubuntu-latest
     needs: [rust, web]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: podman build -f deploy/Containerfile -t usg-ops-console:ci .

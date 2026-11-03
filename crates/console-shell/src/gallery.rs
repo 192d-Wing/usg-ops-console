@@ -3,7 +3,7 @@
 //! is shown in each of its states so reviewers and E2E tests have one page to
 //! exercise in both themes.
 
-use crate::{APP_CHROME_ID, ShellCtx, modal_root};
+use crate::{APP_CHROME_ID, PageMeta, ShellCtx, modal_root, use_page_meta};
 use console_ui::*;
 use yew::prelude::*;
 
@@ -80,6 +80,17 @@ fn table_columns() -> Vec<TableColumn<Row>> {
 
 #[function_component]
 pub fn Gallery() -> Html {
+    use_page_meta(PageMeta {
+        title: "Component gallery".into(),
+        description: Some(
+            "Every console-ui component in each state. Use the theme toggle in the top bar.".into(),
+        ),
+        breadcrumbs: vec![
+            NavLink::new("Console", "/"),
+            NavLink::new("Developer", ""),
+            NavLink::new("Component gallery", "/gallery"),
+        ],
+    });
     let ctx = use_context::<ShellCtx>();
     let flash = ctx.as_ref().map(|c| c.flash.clone()).unwrap_or_default();
 
@@ -327,7 +338,7 @@ pub fn Gallery() -> Html {
                 ]} />
             <Breadcrumbs items={vec![
                 NavLink::new("Console", "/"),
-                NavLink::new("Developer", "/gallery"),
+                NavLink::new("Developer", ""),
                 NavLink::new("Gallery", "/gallery"),
             ]} />
         </Grid>
@@ -355,10 +366,6 @@ pub fn Gallery() -> Html {
     html! {
         <div data-testid="gallery">
             <SpaceBetween size={SpaceSize::L}>
-                <Header variant={HeaderVariant::H1}
-                    description="Every console-ui component in each state. Use the theme toggle in the top bar.">
-                    { "Component gallery" }
-                </Header>
                 { section("g-buttons", "Buttons", buttons) }
                 { section("g-headers", "Headers", headers) }
                 { section("g-links", "Links", links) }

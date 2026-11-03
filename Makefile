@@ -1,4 +1,4 @@
-.PHONY: check fmt lint test web web-gallery check-no-gallery wasm-test gateway run deny audit image
+.PHONY: check fmt lint test web web-gallery check-no-gallery wasm-test gateway run deny audit image e2e e2e-install e2e-typecheck
 
 check: fmt lint test web web-gallery check-no-gallery deny
 
@@ -30,9 +30,26 @@ check-no-gallery: web
 		echo "release dist contains gallery code (CM-7)"; exit 1; \
 	else echo "release dist is gallery-free"; fi
 
-# Optional: headless browser tests for console-ui (needs wasm-pack + Firefox).
+# Headless browser tests for console-ui (needs wasm-pack + the browser and
+# its driver). POAM-003. Override with WASM_BROWSER=chrome (or safari).
+WASM_BROWSER ?= firefox
 wasm-test:
-	wasm-pack test --headless --firefox crates/console-ui
+	wasm-pack test --headless --$(WASM_BROWSER) crates/console-ui
+
+# E2E: Playwright + axe against console-gateway serving dist-gallery on
+# 127.0.0.1:8081, plus a release `dist` smoke run (dist-* projects) on
+# 127.0.0.1:8082; both gateways are started/stopped by Playwright's webServer.
+# Not part of `make check`. Browsers: chromium, firefox, webkit (run
+# `make e2e-install` once).
+E2E_ARGS ?=
+e2e: web web-gallery gateway
+	cd e2e && npm ci && npx tsc --noEmit -p . && npx playwright test $(E2E_ARGS)
+
+e2e-install:
+	cd e2e && npm ci && npx playwright install chromium firefox webkit
+
+e2e-typecheck:
+	cd e2e && npm ci && npx tsc --noEmit -p .
 
 gateway:
 	cargo build --release -p console-gateway

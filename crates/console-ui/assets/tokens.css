@@ -33,9 +33,22 @@
   --cui-radius-l: 16px;
   --cui-radius-pill: 999px;
 
+  /* Border widths */
+  --cui-border-width-s: 1px;
+  --cui-border-width-m: 2px;
+  --cui-border-width-indicator: 3px; /* active tab / nav marker, large spinner */
+  --cui-border-width-l: 4px;
+
   /* Control sizes */
   --cui-size-control: 32px;
-  --cui-size-target-min: 24px;
+  --cui-size-target-min: 1.5rem; /* 24px, WCAG 2.5.8 */
+  --cui-size-control-check: 1.5rem;
+  --cui-size-toggle-w: 2.25rem;
+  --cui-size-toggle-h: 1.25rem;
+  --cui-size-toggle-knob: 0.75rem;
+  --cui-size-modal-w: 40rem;
+  --cui-size-dropdown-w: 18rem;
+  --cui-size-arrow: 0.3125rem;
 
   /* Motion */
   --cui-motion-duration-fast: 90ms;
@@ -44,6 +57,7 @@
   --cui-motion-easing: cubic-bezier(0, 0, 0, 1);
 
   /* Z-index */
+  --cui-z-dropdown: 900;
   --cui-z-modal: 1000;
   --cui-z-flash: 1100;
 

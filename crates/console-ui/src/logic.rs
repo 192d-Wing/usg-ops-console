@@ -47,6 +47,18 @@ pub fn roving_index(current: usize, enabled: &[bool], key: NavKey) -> Option<usi
     }
 }
 
+/// Index of the dropdown item to focus after moving `delta` steps from `cur`
+/// in a list of `len` items, wrapping at both ends. Returns 0 for an empty
+/// list (callers check `len` before focusing). An out-of-range `cur` is
+/// clamped to the last item first.
+pub fn dropdown_next_index(len: usize, cur: usize, delta: isize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    let cur = cur.min(len - 1) as isize;
+    (cur + delta).rem_euclid(len as isize) as usize
+}
+
 /// Focus-trap target when Tab (or Shift+Tab when `backwards`) is pressed.
 /// `current` is the index of the focused element within the trap's focusable
 /// list, or `None` if focus is on the container itself or outside it.
@@ -259,6 +271,18 @@ mod tests {
         assert_eq!(roving_index(0, &[], NavKey::First), None);
         // Out-of-range current is clamped.
         assert_eq!(roving_index(9, &all, NavKey::Next), Some(0));
+    }
+
+    #[test]
+    fn dropdown_index_wraps() {
+        assert_eq!(dropdown_next_index(0, 0, 1), 0);
+        assert_eq!(dropdown_next_index(0, 5, -1), 0);
+        assert_eq!(dropdown_next_index(3, 0, 1), 1);
+        assert_eq!(dropdown_next_index(3, 2, 1), 0);
+        assert_eq!(dropdown_next_index(3, 0, -1), 2);
+        assert_eq!(dropdown_next_index(1, 0, 1), 0);
+        assert_eq!(dropdown_next_index(3, 9, 1), 0);
+        assert_eq!(dropdown_next_index(3, 1, 0), 1);
     }
 
     #[test]

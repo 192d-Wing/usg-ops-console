@@ -130,20 +130,22 @@ pub struct FlashbarProps {
     pub fallback_focus_id: Option<AttrValue>,
 }
 
-/// Moves focus off the dismiss button that is about to be removed.
-fn move_focus_before_dismiss(e: &MouseEvent, fallback: Option<&str>) {
-    let Some(btn) = e
-        .current_target()
-        .and_then(|t| t.dyn_into::<Element>().ok())
-    else {
-        return;
-    };
-    let Some(root) = btn.closest(".cui-flashbar").ok().flatten() else {
-        return;
-    };
-    let Ok(list) = root.query_selector_all(".cui-flash__dismiss") else {
-        return;
-    };
+/// Picks the element that should receive focus once the dismiss button that
+/// was clicked is removed, and focuses it immediately. The caller re-applies
+/// focus after the re-render, because Yew's keyed diff may re-insert the
+/// sibling `<li>` (moving a node blurs it, leaving focus on `<body>`).
+fn move_focus_before_dismiss(e: &MouseEvent, fallback: Option<&str>) -> Option<HtmlElement> {
+    // Not `current_target()`: Yew delegates listeners to the app root, so the
+    // current target is the root element, not the button. Resolve the button
+    // from the actual target (which may be the inner glyph span).
+    let btn = e
+        .target()
+        .and_then(|t| t.dyn_into::<Element>().ok())?
+        .closest(".cui-flash__dismiss")
+        .ok()
+        .flatten()?;
+    let root = btn.closest(".cui-flashbar").ok().flatten()?;
+    let list = root.query_selector_all(".cui-flash__dismiss").ok()?;
     let buttons: Vec<HtmlElement> = (0..list.length())
         .filter_map(|i| list.item(i))
         .filter_map(|n| n.dyn_into::<HtmlElement>().ok())
@@ -162,15 +164,28 @@ fn move_focus_before_dismiss(e: &MouseEvent, fallback: Option<&str>) {
                 .dyn_into::<HtmlElement>()
                 .ok()
         });
-    if let Some(t) = target {
+    if let Some(t) = &target {
         let _ = t.focus();
     }
+    target
 }
 
 /// Stack of page-level notifications. The list is always rendered so the
 /// live regions exist before content is added (required for announcements).
 #[function_component]
 pub fn Flashbar(props: &FlashbarProps) -> Html {
+    // Focus target chosen on dismiss; applied after the DOM update.
+    let pending_focus = use_mut_ref(|| None::<HtmlElement>);
+    {
+        let pending_focus = pending_focus.clone();
+        use_effect(move || {
+            if let Some(t) = pending_focus.borrow_mut().take()
+                && t.is_connected()
+            {
+                let _ = t.focus();
+            }
+        });
+    }
     let polite: Vec<&FlashItem> = props
         .items
         .iter()
@@ -186,8 +201,9 @@ pub fn Flashbar(props: &FlashbarProps) -> Html {
         let id = item.id;
         let on_dismiss = props.on_dismiss.clone();
         let fallback = props.fallback_focus_id.clone();
+        let pending_focus = pending_focus.clone();
         let cb = Callback::from(move |e: MouseEvent| {
-            move_focus_before_dismiss(&e, fallback.as_deref());
+            *pending_focus.borrow_mut() = move_focus_before_dismiss(&e, fallback.as_deref());
             on_dismiss.emit(id);
         });
         html! {

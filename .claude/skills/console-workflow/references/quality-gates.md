@@ -29,6 +29,8 @@ budget or run `cargo audit`, so record those separately.
 
 - Shell WASM ≤ 1.5 MB gzip (CI `web` job enforces it). Growth > 10% vs `main`
   is a MAJOR finding unless justified in plan.md.
+- Baseline: 141,918 B gzip (M2 release, 2026-11-03). CI `web` job warns above
+  baseline x1.10 (156,109 B) and fails above 1,572,864 B.
 - Release profile keeps `opt-level = "z"`, `lto = true`, `codegen-units = 1`.
 - Chrome renders before any tool fetch; no blocking work on first paint.
 - Gateway proxy streams bodies; no full buffering, no per-request client

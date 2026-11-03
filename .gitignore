@@ -4,3 +4,9 @@ crates/console-shell/dist
 crates/console-shell/dist-gallery
 .agent-runs/
 .DS_Store
+
+# E2E (Playwright)
+e2e/node_modules
+e2e/test-results
+e2e/playwright-report
+e2e/blob-report

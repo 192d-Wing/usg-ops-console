@@ -1,13 +1,15 @@
 # syntax=docker/dockerfile:1
-FROM docker.io/library/rust:1.91-bookworm AS build
+# rust:1.99-bookworm (multi-arch index digest, resolved 2026-11-03)
+FROM docker.io/library/rust:1.99-bookworm@sha256:c9155318d07341301a78b45ecdd81af2e43b8b297d64e8fd4c5e80d7735607c3 AS build
 RUN rustup target add wasm32-unknown-unknown \
- && cargo install --locked trunk
+ && cargo install --locked trunk@0.22.1
 WORKDIR /src
 COPY . .
 RUN cd crates/console-shell && trunk build --release \
  && cd /src && cargo build --release --locked -p console-gateway
 
-FROM gcr.io/distroless/cc-debian12:nonroot
+# distroless/cc-debian12:nonroot (multi-arch index digest, resolved 2026-11-03)
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
 COPY --from=build /src/target/release/console-gateway /usr/local/bin/console-gateway
 COPY --from=build /src/crates/console-shell/dist /srv/console
 ENV CONSOLE_DIST=/srv/console CONSOLE_LISTEN=0.0.0.0:8080

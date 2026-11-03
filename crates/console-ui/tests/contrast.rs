@@ -49,6 +49,12 @@ const PAIRS: &[(&str, &str, f64)] = &[
     ("focus", "surface", 3.0),
     ("focus", "surface-raised", 3.0),
     ("focus", "topbar-bg", 3.0),
+    // M2 chrome: dropdown panel (surface-raised, hover rows), top navigation,
+    // search field on the top bar (text/surface-raised, topbar-text/topbar-bg
+    // and text-muted/surface are already listed above).
+    ("text-muted", "surface-hover", 4.5),
+    ("accent-text", "surface-hover", 4.5),
+    ("border", "topbar-bg", 3.0),
 ];
 
 /// Extracts `--cui-color-*: #hex;` declarations from the first block that

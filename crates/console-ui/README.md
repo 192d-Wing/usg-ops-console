@@ -27,6 +27,14 @@ All tokens use the `--cui-` prefix. Groups:
   (`--cui-shadow-*`), focus ring (`--cui-focus-*`), motion
   (`--cui-motion-duration-*`), minimum target size
   (`--cui-size-target-min`), z-index (`--cui-z-*`).
+- Border widths (`--cui-border-width-s|m|indicator|l`) and component sizes
+  (`--cui-size-control-check`, `--cui-size-toggle-*`, `--cui-size-modal-w`,
+  `--cui-size-dropdown-w`, `--cui-size-arrow`).
+
+`components.css` contains no raw `px` lengths (test
+`components_css_has_no_raw_px`). The only exceptions are lines marked
+`/* px-ok: reason */` (visually-hidden clip, forced-colors outline,
+shrink-to-fit table column).
 
 See `assets/tokens.css` for the full list and values.
 
@@ -55,7 +63,8 @@ Every component is a function component, exported from the crate root.
 | --- | --- |
 | Actions | `Button` (normal, primary, link; disabled; loading with `aria-busy`) |
 | Layout | `Container`, `Header` (h1/h2, description, actions), `SpaceBetween`, `Grid` |
-| Navigation | `Link`, `SideNavigation`, `Breadcrumbs`, `Tabs` (ARIA tabs keyboard pattern) |
+| Navigation | `Link`, `SideNavigation`, `Breadcrumbs`, `Tabs` (ARIA tabs keyboard pattern), `NavToggle` (icon button with `aria-expanded`/`aria-controls`) |
+| Chrome | `TopNavigation` (banner with brand/start/search/utilities slots), `Dropdown` + `DropdownItem` (disclosure pattern, not `role=menu`; below 45rem the panel is anchored to the top bar so it stays in the viewport), `SearchInput` (`role="search"` form, `maxlength`, submit prevented) |
 | Status | `Badge`, `StatusIndicator`, `Spinner`, `Alert`, `Flashbar` (with `flash_push` / `flash_dismiss`, max 5) |
 | Forms | `FormField` (label, description, error, wired with `aria-describedby`), `Input`, `Select`, `Checkbox`, `Toggle` |
 | Data | `Table` (columns, empty state, optional multi-select; needs `caption` and `item_key`) |
@@ -65,9 +74,20 @@ Notes:
 
 - Status, alert and flash types show a glyph and visually hidden text, so
   colour is never the only signal.
+- `Breadcrumbs`: a non-last item with an empty `href` renders as plain text.
+- `SideNavigation` dividers are decorative `<li aria-hidden="true">` so every
+  list child is a list item.
+- `Select` keeps the DOM `value` in sync with `selected` after every render,
+  so Back/Forward updates show correctly.
 - `Link`, `SideNavigation` and `Breadcrumbs` pass every `href` through
   `logic::safe_href`. Only `http:`, `https:`, `mailto:` and relative URLs are
   allowed. Anything else, including `//host` and backslash forms, becomes `#`.
+- `Dropdown`: opening focuses the first item; ArrowUp/ArrowDown wrap, Home
+  and End jump; Escape closes and returns focus to the button; focus moving
+  outside or a pointerdown outside closes it. The document listener exists
+  only while open. Items render only while open; the panel uses `hidden`.
+  With `test_id = "x"` the button is `x-button`, panel `x-panel`, each item
+  `x-item-{id}`.
 - `Alert` `on_dismiss` does not move focus. The consumer must move it.
   `Flashbar` moves focus to a neighbouring flash, or to `fallback_focus_id`.
 - Pure logic (keyboard navigation, focus trap, flash queue, selection,
@@ -120,6 +140,8 @@ This runs the unit, contrast, guard and QA logic/CSS tests.
 make wasm-test
 ```
 
-This runs the browser tests in `tests/wasm.rs` with wasm-pack and headless
-Firefox. These tests have **not been run yet**, and CI does not run them. See
+This runs the browser tests in `tests/wasm.rs` with wasm-pack, in headless
+Firefox by default (`make wasm-test WASM_BROWSER=chrome` to use Chrome). In
+M2 they passed locally in headless Chrome (16 passed). The CI `wasm-test` job
+(Firefox) has not had a green run yet, so POAM-003 stays open. See
 `docs/compliance/POAM.md`.

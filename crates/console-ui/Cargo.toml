@@ -15,20 +15,24 @@ yew.workspace = true
 web-sys = { version = "0.3", features = [
   "Document",
   "Element",
+  "Event",
+  "EventTarget",
   "FocusEvent",
   "HtmlElement",
   "HtmlInputElement",
   "HtmlSelectElement",
+  "InputEvent",
   "KeyboardEvent",
   "MouseEvent",
   "Node",
   "NodeList",
+  "SubmitEvent",
   "Window",
 ] }
 
 [target.'cfg(target_arch = "wasm32")'.dev-dependencies]
 wasm-bindgen-test = "0.3"
-web-sys = { version = "0.3", features = ["KeyboardEventInit"] }
+web-sys = { version = "0.3", features = ["KeyboardEventInit", "PointerEvent", "PointerEventInit", "EventInit"] }
 
 [lints]
 workspace = true

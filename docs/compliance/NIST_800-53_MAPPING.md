@@ -1,6 +1,7 @@
 # NIST SP 800-53 Rev. 5 control mapping
 
-Status as of M1 (console-ui core components and design tokens), 2026-11-03.
+Status as of M2 (shell chrome, global scope picker, Playwright/axe E2E),
+2026-11-03.
 This file describes only what the code in this repository does today.
 
 Status values:
@@ -17,11 +18,16 @@ Status values:
 | Control | Status | Milestone |
 | --- | --- | --- |
 | CM-7 Least functionality (gallery excluded from release) | Implemented | M1 |
-| SI-10 Input validation (`safe_href`, theme allow-list) | Implemented | M1 |
+| SI-10 Input validation (`safe_href`, theme allow-list, scope URL query, search length) | Implemented | M1-M2 |
+| SI-11 Error handling (scope errors name the key only) | Implemented | M2 |
 | SC-8 Transmission confidentiality (HSTS header) | Partial | M0 |
-| SC-18 / SI-10 Content Security Policy (hash-based) | Partial | M0 |
+| SC-18 / SI-10 Content Security Policy (hash-based) | Partial | M0-M2 |
+| SA-11 Developer testing (wasm-bindgen and E2E jobs) | Partial (pending first green CI run) | M2 |
+| SA-11(1) Static code analysis (clippy) | Implemented | M0 |
+| SR-3, SR-11, CM-14 Supply chain (pinned actions, images, npm) | Partial | M2 |
 | RA-5 / SI-2 Dependency vulnerability scanning | Partial | M0 |
-| AC-2, AC-3, AC-6 Account management, access enforcement | Planned | M3-M4 |
+| PL-8 Security architecture (scope is a UI filter only) | Partial (documented design rule) | M2 |
+| AC-2, AC-3, AC-6 Account management, access enforcement | Planned (POAM-010) | M3-M4 |
 | AC-11, AC-12 Session lock, session termination | Planned | M3 |
 | AU-2, AU-3, AU-12 Audit events | Planned | M3 |
 | IA-2, IA-2(12) Identification, PIV/CAC | Planned (to be Inherited from Keycloak) | M3 |
@@ -56,13 +62,19 @@ Evidence:
 - CI job step "Release bundle is gallery-free (CM-7)" in
   `.github/workflows/ci.yml` runs the same grep on the CI release build.
 
+- E2E `e2e/tests/dist-smoke.spec.ts` test "release dist: /gallery is NotFound
+  (gallery not compiled in)" runs against the release `dist` (gateway on
+  127.0.0.1:8082, `dist-*` Playwright projects). Passed locally on Chromium
+  and WebKit; Firefox not run. `make e2e` is local only; the CI `e2e` job
+  has not had a green run yet (see SA-11).
+
 Limits: the gallery has no authentication. That is acceptable only while it
 stays compiled out of release builds. `make run` serves the gallery bundle and
 is for local development only.
 
 ## SI-10 Information input validation
 
-**Status: Implemented** for the two M1 input points listed here. Other input
+**Status: Implemented** for the four input points listed here. Other input
 points (manifests, SDK messages, OIDC) do not exist yet.
 
 ### `safe_href`: rendered link targets
@@ -96,7 +108,64 @@ Tests:
   (`crates/console-shell/src/theme.rs`)
 
 Gap: the wasm-only DOM path (`theme::dom::load/apply/save`) has no test. See
-POA&M item SEC-003.
+POA&M item POAM-009.
+
+### Scope URL query (`site`, `tenant`, `env`)
+
+`crates/console-shell/src/scope.rs` (annotated `NIST 800-53: SI-10` and
+`SI-11`) parses `location.search`:
+
+- The query is ignored as a whole if it is over 2048 bytes or 32 pairs.
+- Keys are matched exactly and case-sensitively. A repeated key is rejected.
+- No percent-decoding and no `+` handling. A value is accepted only if it
+  matches `[a-z0-9][a-z0-9-]{0,62}` (checked byte by byte) **and** exists in
+  the demo hierarchy (`crates/console-shell/src/demo.rs`): tenant must exist
+  under the site, env under the (site, tenant) pair.
+- Rejected keys are dropped and the URL is rewritten with `replaceState`.
+
+`same_origin_url` in `crates/console-shell/src/main.rs` (SEC-001) collapses a
+leading run of `/` or `\` to one `/` before every history push/replace, so a
+crafted pathname such as `//evil.example/` cannot make `pushState` throw.
+
+Tests (native, `crates/console-shell/src/scope.rs` `tests`): `charset`,
+`rejects_bad_values_without_decoding`, `keys_exact_and_case_sensitive`,
+`duplicates_rejected`, `oversize_ignored`, `relationship_checks`,
+`qa_size_limits_exact_boundaries`,
+`qa_uppercase_and_percent_encoding_rejected_at_every_level`,
+`qa_repeated_lower_keys_rejected_upper_kept`, `qa_tenant_or_env_without_site`,
+`qa_cross_site_pairs`, `qa_cascade_results_are_always_valid`; and
+`tests::same_origin_url_collapses_leading_slashes`
+(`crates/console-shell/src/main.rs`). E2E: `e2e/tests/scope.spec.ts`
+(relationship validation and "QA: URL edge cases", for example "oversize query
+(>2048 bytes) ignores all scope with a fixed message", "percent-encoded valid id
+is not decoded").
+
+### Global search box
+
+`SearchInput` (`crates/console-ui/src/components/search.rs:33`, annotated
+`SI-10 - input length-bounded (maxlength + truncation)`) sets `maxlength`. The
+shell's `GlobalSearch` (`crates/console-shell/src/chrome.rs`) truncates to 256
+characters and is display-only: submit shows a fixed "Search is not available
+yet" flash and the query is not put in the URL or storage.
+
+Tests: wasm `search_input_maxlength_and_submit`
+(`crates/console-ui/tests/wasm.rs`, local Chrome only, see POAM-003); E2E
+"search submit shows fixed info flash and never echoes the query"
+(`e2e/tests/keyboard.spec.ts`).
+
+## SI-11 Error handling
+
+**Status: Implemented** for scope URL errors.
+
+`crates/console-shell/src/scope.rs`: errors carry only the key name, never the
+value. The shell shows one Warning flash, for example `Ignored invalid scope in
+URL: site, tenant`, or `... : query too long` for oversize queries. Cascade
+announcements are built from allow-list labels only. `same_origin_url` (see
+SI-10) prevents a crafted path from turning into a wasm panic.
+
+Tests: `errors_never_contain_value` (`scope.rs`); E2E invalid-value cases in
+`e2e/tests/scope.spec.ts` check that the value appears in neither the DOM nor
+the title.
 
 ## SC-8 Transmission confidentiality and integrity
 
@@ -147,10 +216,90 @@ Gateway tests (`crates/console-gateway/src/main.rs`):
 - `tests::hashes_only_inline_scripts`: only scripts without a `src` are
   hashed.
 
-Why only Partial: `Referrer-Policy` and the full CSP string have no test. A live
-check showed no CSP violations on `/gallery`
-(`findings-orchestrator-browser.md`, M1 run). That was a manual check, not an
-automated test.
+Browser E2E (M2):
+
+- `e2e/tests/csp.spec.ts` "no CSP violations and no non-empty [style]
+  attributes across interactions" (gallery bundle, port 8081).
+- `e2e/tests/dist-smoke.spec.ts` "release dist: / loads with zero CSP
+  violations" (release `dist`, port 8082), annotated `NIST 800-53: SC-18`.
+- Both passed locally on Chromium and WebKit. Firefox has not been run, and
+  the CI `e2e` job has not had a green run yet.
+
+### Known benign CSP reports
+
+WebKit reports a `style-src-attr` violation every time an `HTMLSelectElement`
+is created, even with no app code (minimal repro with
+`document.createElement('select')`). It is engine behaviour, not a style the
+console sets. The tests allow it **on WebKit only**, and only when the report
+matches exactly `{violatedDirective: "style-src-attr", blockedURI: "inline",
+sample: ""}` with a target tag of `SELECT` or `null`, up to the number of
+`<select>` elements plus 1 per page (`e2e/tests/csp-helpers.ts`). Every other
+report fails on every engine, and Chromium must report 0.
+
+Residual risk: a first-party inline-style violation with a `null` target on
+WebKit would also match (bounded by the cap and the `[style]` DOM check).
+`'report-sample'` is not in the CSP, so the sample is always empty. Upstream
+WebKit bug link: TBD. Tracked as POA&M item POAM-011. A future CSP report
+collector must filter this triple.
+
+Why only Partial: `Referrer-Policy` and the full CSP string have no unit test.
+The browser E2E evidence is local only until the CI `e2e` job runs green.
+
+## SA-11 Developer testing and evaluation
+
+**Status: Partial (pending first green CI run).**
+
+`.github/workflows/ci.yml` has two jobs added in M2 that have **never run**:
+
+- `wasm-test` (comment `POAM-003 / SA-11`): `wasm-pack test --headless
+  --firefox crates/console-ui`, uploads artifact `wasm-pack-log`.
+- `e2e`: builds `dist`, `dist-gallery` and the gateway, runs `npm ci`, `tsc`,
+  `npm audit --audit-level=high`, then `npx playwright test` on chromium,
+  firefox and webkit plus the `dist-*` smoke projects; uploads artifact
+  `playwright-report`.
+
+Local evidence only: `make wasm-test WASM_BROWSER=chrome` 16 passed; `make e2e`
+on chromium, webkit, dist-chromium and dist-webkit 102 passed, 12 skipped (axe
+is Chromium-only by design). Firefox not run. See POAM-003 to POAM-006 and
+POAM-012.
+
+## SA-11(1) Static code analysis
+
+**Status: Implemented.**
+
+`make lint` and the CI `rust` job (comment `SA-11(1)` in
+`.github/workflows/ci.yml`) run `cargo clippy ... -D warnings` on the host
+workspace (all targets) and on wasm32 for console-shell (with and without
+`gallery`) and console-ui (all targets). A warning fails the build.
+
+## SR-3, SR-11, CM-14 Supply chain controls
+
+**Status: Partial.** The build inputs are pinned; signatures are not verified.
+
+- Every third-party GitHub Action in `.github/workflows/ci.yml` is pinned to a
+  full commit SHA with a version comment. `trunk-action` pins trunk
+  `v0.22.1`, the same version the Containerfile installs.
+- `deploy/Containerfile` pins `rust:1.99-bookworm` and
+  `distroless/cc-debian12:nonroot` by `@sha256` digest, and installs
+  `trunk@0.22.1 --locked`.
+- `e2e/.npmrc` sets `save-exact=true`, `ignore-scripts=true` and
+  `engine-strict=true`. `e2e/package.json` requires Node `>=24`, CI uses Node
+  24, and `npm audit --audit-level=high` fails the CI job.
+
+Why only Partial: these are configuration, not tests. The container build with
+the digests and the CI workflow have not been run (podman and CI not run in
+M2). There is no signature or provenance verification, and no automated update
+process (Dependabot/Renovate) for the pins.
+
+## PL-8 Security and privacy architecture: scope
+
+**Status: Partial (documented design rule, nothing to enforce yet).**
+
+The global scope (site, tenant, environment) is a **UI filter, not an
+authorization claim**. It lives only in the URL query (never in
+`localStorage`; E2E "scope is never written to localStorage"). Upstreams must
+not trust scope values a tool echoes back, and M4 must re-authorize scope on
+the server. No server-side check exists yet.
 
 ## RA-5 / SI-2 Dependency vulnerability scanning
 
@@ -168,7 +317,9 @@ process documented in code yet.
 None of the following has any code yet. Do not cite them as implemented.
 
 - **AC-2, AC-3, AC-6**: roles and access enforcement come with OIDC and the tool
-  registry (M3-M4).
+  registry (M3-M4). In M2 the user menu shows a static "Demo User (demo)",
+  "Sign out" only shows an info flash, and the service menu is unfiltered
+  demo data (POAM-010).
 - **AC-11, AC-12**: idle timeout and logout (M3). See
   `docs/compliance/SESSION_MANAGEMENT.md`.
 - **AU-2, AU-3, AU-12**: audit event stream (M3). See
@@ -181,5 +332,6 @@ None of the following has any code yet. Do not cite them as implemented.
 
 WCAG 2.1 AA colour contrast: test `token_pairs_meet_wcag_aa` in
 `crates/console-ui/tests/contrast.rs` checks 40 declared token pairs in each
-theme against 4.5:1 (text) or 3:1 (UI). An axe scan has **not** been run. See
-the POA&M.
+theme against 4.5:1 (text) or 3:1 (UI). axe scans run in
+`e2e/tests/a11y.spec.ts` on Chromium only (0 serious/critical locally); CI
+has not run them yet. See POAM-004 and POAM-012.

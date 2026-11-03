@@ -1,5 +1,5 @@
-/* Shell chrome. Uses console-ui tokens only (no raw colours/sizes except
-   layout breakpoints and the topbar/sidenav dimensions). */
+/* Shell chrome layout. Uses console-ui tokens only (no raw colours/sizes except
+   layout breakpoints and the sidenav column width). */
 * { box-sizing: border-box; }
 body {
   margin: 0;
@@ -15,33 +15,63 @@ body {
   background: var(--cui-color-surface); color: var(--cui-color-accent-text);
   border-radius: var(--cui-radius-s); z-index: var(--cui-z-flash);
 }
-.skip-link:focus { top: var(--cui-space-s); outline: 2px solid transparent; outline-offset: 2px; box-shadow: var(--cui-focus-ring); }
-.topbar {
-  display: flex; flex-wrap: wrap; align-items: center; gap: var(--cui-space-m);
-  min-height: calc(var(--cui-size-control) + 2 * var(--cui-space-s));
-  padding: var(--cui-space-xs) var(--cui-space-m);
-  background: var(--cui-color-topbar-bg); color: var(--cui-color-topbar-text);
+.skip-link:focus {
+  top: var(--cui-space-s);
+  outline: var(--cui-border-width-m) solid transparent; outline-offset: var(--cui-border-width-m);
+  box-shadow: var(--cui-focus-ring);
 }
-.topbar__brand { font-weight: var(--cui-font-weight-bold); }
-.topbar__spacer { flex: 1; }
-.topbar__meta { font-size: var(--cui-font-size-s); }
 .topbar__theme {
   font: inherit; color: inherit; background: transparent;
-  border: 1px solid currentColor; border-radius: var(--cui-radius-pill);
+  border: var(--cui-border-width-s) solid currentColor; border-radius: var(--cui-radius-pill);
   min-height: var(--cui-size-target-min); padding: 0 var(--cui-space-m); cursor: pointer;
 }
-.topbar__theme:focus-visible { outline: 2px solid transparent; outline-offset: 2px; box-shadow: var(--cui-focus-ring); }
+.topbar__theme:focus-visible {
+  outline: var(--cui-border-width-m) solid transparent; outline-offset: var(--cui-border-width-m);
+  box-shadow: var(--cui-focus-ring);
+}
+
+/* Scope bar: below the banner, on the surface colour so field labels keep
+   their normal contrast. Wraps at narrow widths. */
+.scopebar {
+  display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--cui-space-s) var(--cui-space-m);
+  padding: var(--cui-space-s) var(--cui-space-m);
+  background: var(--cui-color-surface);
+  border-bottom: var(--cui-border-width-s) solid var(--cui-color-border-subtle);
+}
+.scopebar__meta { margin-inline-start: auto; font-size: var(--cui-font-size-s); color: var(--cui-color-text-muted); }
+.scope-picker { display: flex; flex-wrap: wrap; gap: var(--cui-space-s) var(--cui-space-m); min-width: 0; }
+.scope-picker__field { display: flex; flex-direction: column; min-width: 10rem; }
+.scope-picker__hint {
+  margin: var(--cui-space-xxs) 0 0;
+  font-size: var(--cui-font-size-s); color: var(--cui-color-text-muted);
+}
+
 .shell-flash { position: sticky; top: 0; z-index: var(--cui-z-flash); }
 .layout { display: grid; grid-template-columns: 15rem minmax(0, 1fr); min-height: 100vh; }
 .sidenav-region {
-  background: var(--cui-color-surface); border-right: 1px solid var(--cui-color-border-subtle);
+  background: var(--cui-color-surface);
+  border-right: var(--cui-border-width-s) solid var(--cui-color-border-subtle);
   padding: var(--cui-space-m);
 }
+.sidenav-region[hidden] { display: none; }
 .content { padding: var(--cui-space-l); min-width: 0; }
 .content:focus { outline: none; }
+.page-crumbs { margin-bottom: var(--cui-space-s); }
+.page-header { margin-bottom: var(--cui-space-l); }
 .gallery-section { margin-bottom: var(--cui-space-xl); }
-@media (max-width: 45rem) {
+
+/* Side nav collapses behind the toggle below 45rem (A11Y-008); the matching
+   matchMedia query lives in main.rs (NAV_BREAKPOINT). */
+@media (min-width: 45rem) {
+  .nav-toggle-slot { display: none; }
+}
+@media (max-width: 44.99rem) {
   .layout { grid-template-columns: minmax(0, 1fr); }
-  .sidenav-region { border-right: 0; border-bottom: 1px solid var(--cui-color-border-subtle); }
+  .sidenav-region {
+    border-right: 0;
+    border-bottom: var(--cui-border-width-s) solid var(--cui-color-border-subtle);
+  }
   .content { padding: var(--cui-space-m); }
+  .scope-picker, .scope-picker__field { flex: 1 1 100%; }
+  .scopebar__meta { margin-inline-start: 0; }
 }

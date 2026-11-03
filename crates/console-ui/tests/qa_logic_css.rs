@@ -239,3 +239,118 @@ fn exported_css_consts_match_files() {
     assert_eq!(console_ui::COMPONENTS_CSS, COMPONENTS);
     assert!(!console_ui::COMPONENTS_CSS.contains("@import url(http"));
 }
+
+// ---- M2: A11Y-007 px guard and dropdown index ----
+
+/// Lines of `css` containing a raw `<digits>px` length, ignoring comments and
+/// lines marked `/* px-ok */` (a documented exception).
+fn raw_px_hits(css: &str) -> Vec<String> {
+    let mut hits = Vec::new();
+    for (n, line) in css.lines().enumerate() {
+        if line.contains("px-ok") {
+            continue;
+        }
+        let code = strip_comments(line);
+        let b = code.as_bytes();
+        let found = code
+            .match_indices("px")
+            .any(|(i, _)| i > 0 && b[i - 1].is_ascii_digit());
+        if found {
+            hits.push(format!("{}: {}", n + 1, line.trim()));
+        }
+    }
+    hits
+}
+
+#[test]
+fn components_css_has_no_raw_px() {
+    let hits = raw_px_hits(COMPONENTS);
+    assert!(
+        hits.is_empty(),
+        "raw px in components.css (use a token or mark /* px-ok */):\n{}",
+        hits.join("\n")
+    );
+    // The guard itself must catch a raw value.
+    assert_eq!(raw_px_hits("a { width: 18px; }").len(), 1);
+    assert!(raw_px_hits("a { width: 1px; /* px-ok: why */ }").is_empty());
+    assert!(raw_px_hits("/* 24px in a comment */").is_empty());
+}
+
+#[test]
+fn px_ok_exceptions_are_few_and_explained() {
+    let n = COMPONENTS
+        .lines()
+        .filter(|l| l.contains("px-ok"))
+        .inspect(|l| assert!(l.contains("px-ok:"), "px-ok without reason: {l}"))
+        .count();
+    assert!(n <= 6, "too many px-ok exceptions: {n}");
+}
+
+#[test]
+fn a11y007_tokens_present() {
+    for t in [
+        "--cui-border-width-s: 1px",
+        "--cui-border-width-m: 2px",
+        "--cui-border-width-l: 4px",
+        "--cui-size-control-check: 1.5rem",
+        "--cui-size-target-min: 1.5rem",
+        "--cui-size-toggle-w: 2.25rem",
+        "--cui-size-toggle-h: 1.25rem",
+        "--cui-size-toggle-knob: 0.75rem",
+        "--cui-size-modal-w: 40rem",
+        "--cui-size-dropdown-w: 18rem",
+        "--cui-size-arrow: 0.3125rem",
+        "--cui-z-dropdown: 900",
+    ] {
+        assert!(TOKENS.contains(t), "missing token {t}");
+    }
+    let checkbox = COMPONENTS
+        .split(".cui-checkbox__input {")
+        .nth(1)
+        .and_then(|s| s.split('}').next())
+        .expect("checkbox rule");
+    assert!(checkbox.contains("var(--cui-size-control-check)"));
+}
+
+#[test]
+fn dropdown_below_modal_and_flash() {
+    let z = |name: &str| -> u32 {
+        let i = TOKENS.find(name).expect(name) + name.len();
+        TOKENS[i..]
+            .trim_start_matches([':', ' '])
+            .split(';')
+            .next()
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    };
+    assert!(z("--cui-z-dropdown") < z("--cui-z-modal"));
+    assert!(z("--cui-z-modal") < z("--cui-z-flash"));
+}
+
+#[test]
+fn dropdown_next_index_edges() {
+    assert_eq!(dropdown_next_index(0, 0, 1), 0);
+    assert_eq!(dropdown_next_index(0, 0, -1), 0);
+    assert_eq!(dropdown_next_index(4, 3, 1), 0);
+    assert_eq!(dropdown_next_index(4, 0, -1), 3);
+    assert_eq!(dropdown_next_index(4, 1, 5), 2);
+    assert_eq!(dropdown_next_index(4, 1, -5), 0);
+    assert_eq!(dropdown_next_index(4, 100, -1), 2);
+}
+
+#[test]
+fn new_components_have_css() {
+    for c in [
+        ".cui-topnav {",
+        ".cui-dropdown__panel {",
+        ".cui-dropdown__item {",
+        ".cui-search {",
+        ".cui-navtoggle {",
+    ] {
+        assert!(COMPONENTS.contains(c), "missing rule {c}");
+    }
+    // Panel visibility relies on the `hidden` attribute, never inline style.
+    assert!(COMPONENTS.contains(".cui-dropdown__panel[hidden]"));
+}

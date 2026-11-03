@@ -123,9 +123,28 @@ pub fn Select(props: &SelectProps) -> Html {
         .onchange
         .reform(|e: Event| AttrValue::from(e.target_unchecked_into::<HtmlSelectElement>().value()));
     let sel = props.selected.clone();
+    // Controlled value: option `selected` attributes only set the *default*
+    // selectedness and stop applying once the user has changed the control,
+    // so after every render (options are in the DOM by then) set the `value`
+    // property from props. Fixes stale pickers on history Back/Forward.
+    let node = use_node_ref();
+    {
+        let node = node.clone();
+        let want = sel
+            .clone()
+            .or_else(|| props.placeholder.as_ref().map(|_| AttrValue::Static("")));
+        use_effect(move || {
+            if let (Some(el), Some(v)) = (node.cast::<HtmlSelectElement>(), want)
+                && el.value() != v.as_str()
+            {
+                el.set_value(&v);
+            }
+        });
+    }
     html! {
         <span class="cui-select">
             <select
+                ref={node}
                 class={classes!("cui-select__control", props.invalid.then_some("cui-input--invalid"))}
                 disabled={props.disabled}
                 aria-invalid={props.invalid.then_some("true")}

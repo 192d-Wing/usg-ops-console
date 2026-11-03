@@ -19,6 +19,7 @@ evidence is in [docs/compliance/](docs/compliance/).
 ## Develop
 
 Requires stable Rust with `wasm32-unknown-unknown`, `trunk`, and `cargo-deny`.
+The E2E tests also need Node 24 or later; `make wasm-test` needs `wasm-pack`.
 
 ```bash
 make check
@@ -33,7 +34,10 @@ check-no-gallery and deny.
 | `make web-gallery` | Shell with the component gallery in `crates/console-shell/dist-gallery` (development only) |
 | `make check-no-gallery` | Rebuilds `dist` and fails if it has no wasm or the wasm contains gallery code (CM-7) |
 | `make run` | Builds `web-gallery` and serves it at <http://127.0.0.1:8080> (gallery at `/gallery`) |
-| `make wasm-test` | console-ui browser tests (needs `wasm-pack` and Firefox; not part of `make check` or CI) |
+| `make wasm-test` | console-ui browser tests with wasm-pack (headless Firefox by default; `WASM_BROWSER=chrome` to override). Not part of `make check`. CI job `wasm-test` exists but has not had a green run yet |
+| `make e2e-install` | `npm ci` in `e2e/` and installs Playwright browsers (chromium, firefox, webkit) |
+| `make e2e` | Builds `web`, `web-gallery` and `gateway`, then runs Playwright + axe. Starts gateways on 127.0.0.1:8081 (`dist-gallery`) and 127.0.0.1:8082 (release `dist`). Pass options with `E2E_ARGS`, for example `E2E_ARGS="--project=chromium"`. Not part of `make check` |
+| `make e2e-typecheck` | `npm ci` and `tsc --noEmit` in `e2e/` |
 
 ## Workflow
 
