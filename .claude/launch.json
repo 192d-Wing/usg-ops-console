@@ -4,9 +4,32 @@
     {
       "name": "console",
       "runtimeExecutable": "cargo",
-      "runtimeArgs": ["run", "-q", "-p", "console-gateway"],
-      "env": { "CONSOLE_LISTEN": "127.0.0.1:8080", "CONSOLE_DIST": "crates/console-shell/dist" },
+      "runtimeArgs": [
+        "run",
+        "-q",
+        "-p",
+        "console-gateway"
+      ],
+      "env": {
+        "CONSOLE_LISTEN": "127.0.0.1:8080",
+        "CONSOLE_DIST": "crates/console-shell/dist"
+      },
       "port": 8080
+    },
+    {
+      "name": "console-gallery",
+      "runtimeExecutable": "cargo",
+      "runtimeArgs": [
+        "run",
+        "-q",
+        "-p",
+        "console-gateway"
+      ],
+      "env": {
+        "CONSOLE_LISTEN": "127.0.0.1:8081",
+        "CONSOLE_DIST": "crates/console-shell/dist-gallery"
+      },
+      "port": 8081
     }
   ]
 }

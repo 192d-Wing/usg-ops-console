@@ -10,6 +10,14 @@ publish.workspace = true
 console-protocol.workspace = true
 console-ui.workspace = true
 yew.workspace = true
+yew-router.workspace = true
+web-sys = { workspace = true, features = ["Window", "Document", "Element", "Storage", "HtmlElement"] }
 
 [lints]
 workspace = true
+
+[features]
+# Component gallery at /gallery. Off by default so release/Containerfile
+# builds omit it (CM-7); `make run` / `make web-gallery` enable it.
+default = []
+gallery = []

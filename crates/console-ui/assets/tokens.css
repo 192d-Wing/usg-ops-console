@@ -1,0 +1,176 @@
+/* console-ui design tokens. Custom properties only; no selectors besides
+ * :root. Semi-public contract: renames are breaking changes.
+ * Theme: :root = light; dark via prefers-color-scheme unless
+ * data-theme="light", or forced with data-theme="dark".
+ * The two dark blocks MUST stay identical (enforced by tests/contrast.rs). */
+:root {
+  color-scheme: light;
+
+  /* Typography */
+  --cui-font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --cui-font-family-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --cui-font-size-xs: 0.75rem;
+  --cui-font-size-s: 0.875rem;
+  --cui-font-size-m: 1rem;
+  --cui-font-size-l: 1.25rem;
+  --cui-font-size-xl: 1.75rem;
+  --cui-font-weight-normal: 400;
+  --cui-font-weight-bold: 700;
+  --cui-font-line-height: 1.5;
+  --cui-font-line-height-tight: 1.25;
+
+  /* Spacing */
+  --cui-space-xxs: 2px;
+  --cui-space-xs: 4px;
+  --cui-space-s: 8px;
+  --cui-space-m: 16px;
+  --cui-space-l: 24px;
+  --cui-space-xl: 32px;
+
+  /* Radius */
+  --cui-radius-s: 4px;
+  --cui-radius-m: 8px;
+  --cui-radius-l: 16px;
+  --cui-radius-pill: 999px;
+
+  /* Control sizes */
+  --cui-size-control: 32px;
+  --cui-size-target-min: 24px;
+
+  /* Motion */
+  --cui-motion-duration-fast: 90ms;
+  --cui-motion-duration-normal: 180ms;
+  --cui-motion-duration-slow: 300ms;
+  --cui-motion-easing: cubic-bezier(0, 0, 0, 1);
+
+  /* Z-index */
+  --cui-z-modal: 1000;
+  --cui-z-flash: 1100;
+
+  /* Colour: neutrals */
+  --cui-color-bg: #f4f4f4;
+  --cui-color-surface: #ffffff;
+  --cui-color-surface-raised: #ffffff;
+  --cui-color-surface-hover: #f0f3f6;
+  --cui-color-text: #16191f;
+  --cui-color-text-muted: #5f6b7a;
+  --cui-color-text-disabled: #87919e;
+  --cui-color-border: #7d8998;
+  --cui-color-border-subtle: #d1d5db;
+  --cui-color-border-disabled: #87919e;
+  --cui-color-overlay: rgba(15, 27, 42, 0.6);
+
+  /* Colour: accent */
+  --cui-color-accent: #0966c2;
+  --cui-color-accent-hover: #054d94;
+  --cui-color-accent-text: #0966c2;
+  --cui-color-on-accent: #ffffff;
+  --cui-color-accent-subtle: #e8f2fc;
+
+  /* Colour: status (fg = icon/text, bg = tinted panel) */
+  --cui-color-info: #0966c2;
+  --cui-color-info-bg: #f0f7fd;
+  --cui-color-success: #037f0c;
+  --cui-color-success-bg: #effaf0;
+  --cui-color-warning: #855900;
+  --cui-color-warning-bg: #fffbe8;
+  --cui-color-error: #c71414;
+  --cui-color-error-bg: #fff4f4;
+  --cui-color-pending: #5f6b7a;
+  --cui-color-stopped: #5f6b7a;
+
+  /* Colour: chrome */
+  --cui-color-topbar-bg: #0f1b2a;
+  --cui-color-topbar-text: #ffffff;
+
+  /* Focus */
+  --cui-color-focus: #0966c2;
+  --cui-focus-ring: 0 0 0 2px var(--cui-color-surface), 0 0 0 4px var(--cui-color-focus);
+
+  /* Shadow */
+  --cui-shadow-s: 0 1px 2px rgba(0, 7, 22, 0.12);
+  --cui-shadow-m: 0 2px 8px rgba(0, 7, 22, 0.16);
+  --cui-shadow-l: 0 8px 24px rgba(0, 7, 22, 0.24);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --cui-color-bg: #0f1b2a;
+    --cui-color-surface: #192534;
+    --cui-color-surface-raised: #232f3e;
+    --cui-color-surface-hover: #232f3e;
+    --cui-color-text: #e9ebed;
+    --cui-color-text-muted: #a4afbd;
+    --cui-color-text-disabled: #7d8998;
+    --cui-color-border: #7d8998;
+    --cui-color-border-subtle: #414d5c;
+    --cui-color-border-disabled: #7d8998;
+    --cui-color-overlay: rgba(0, 7, 22, 0.7);
+    --cui-color-accent: #539fe5;
+    --cui-color-accent-hover: #89bdee;
+    --cui-color-accent-text: #75b3ec;
+    --cui-color-on-accent: #0f1b2a;
+    --cui-color-accent-subtle: #13304d;
+    --cui-color-info: #75b3ec;
+    --cui-color-info-bg: #12263d;
+    --cui-color-success: #4cc254;
+    --cui-color-success-bg: #10291a;
+    --cui-color-warning: #e0b84a;
+    --cui-color-warning-bg: #2b2410;
+    --cui-color-error: #ff8a8a;
+    --cui-color-error-bg: #33171b;
+    --cui-color-pending: #a4afbd;
+    --cui-color-stopped: #a4afbd;
+    --cui-color-topbar-bg: #000716;
+    --cui-color-topbar-text: #ffffff;
+    --cui-color-focus: #75b3ec;
+    --cui-shadow-s: 0 1px 2px rgba(0, 0, 0, 0.5);
+    --cui-shadow-m: 0 2px 8px rgba(0, 0, 0, 0.5);
+    --cui-shadow-l: 0 8px 24px rgba(0, 0, 0, 0.6);
+  }
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --cui-color-bg: #0f1b2a;
+  --cui-color-surface: #192534;
+  --cui-color-surface-raised: #232f3e;
+  --cui-color-surface-hover: #232f3e;
+  --cui-color-text: #e9ebed;
+  --cui-color-text-muted: #a4afbd;
+  --cui-color-text-disabled: #7d8998;
+  --cui-color-border: #7d8998;
+  --cui-color-border-subtle: #414d5c;
+  --cui-color-border-disabled: #7d8998;
+  --cui-color-overlay: rgba(0, 7, 22, 0.7);
+  --cui-color-accent: #539fe5;
+  --cui-color-accent-hover: #89bdee;
+  --cui-color-accent-text: #75b3ec;
+  --cui-color-on-accent: #0f1b2a;
+  --cui-color-accent-subtle: #13304d;
+  --cui-color-info: #75b3ec;
+  --cui-color-info-bg: #12263d;
+  --cui-color-success: #4cc254;
+  --cui-color-success-bg: #10291a;
+  --cui-color-warning: #e0b84a;
+  --cui-color-warning-bg: #2b2410;
+  --cui-color-error: #ff8a8a;
+  --cui-color-error-bg: #33171b;
+  --cui-color-pending: #a4afbd;
+  --cui-color-stopped: #a4afbd;
+  --cui-color-topbar-bg: #000716;
+  --cui-color-topbar-text: #ffffff;
+  --cui-color-focus: #75b3ec;
+  --cui-shadow-s: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --cui-shadow-m: 0 2px 8px rgba(0, 0, 0, 0.5);
+  --cui-shadow-l: 0 8px 24px rgba(0, 0, 0, 0.6);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --cui-motion-duration-fast: 0ms;
+    --cui-motion-duration-normal: 0ms;
+    --cui-motion-duration-slow: 0ms;
+  }
+}

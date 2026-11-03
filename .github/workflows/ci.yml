@@ -44,6 +44,13 @@ jobs:
       - uses: jetli/trunk-action@v0.5.0
       - run: trunk build --release
         working-directory: crates/console-shell
+      - name: Release bundle is gallery-free (CM-7)
+        run: |
+          ls crates/console-shell/dist/*.wasm >/dev/null || { echo "no release wasm in dist to check"; exit 1; }
+          if grep -l "Component gallery" crates/console-shell/dist/*.wasm; then
+            echo "release dist contains gallery code (CM-7)"; exit 1
+          fi
+          echo "release dist is gallery-free"
       - name: Shell WASM gzip size <= 1.5 MB
         run: |
           size=$(gzip -c crates/console-shell/dist/*.wasm | wc -c)

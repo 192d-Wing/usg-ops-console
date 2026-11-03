@@ -1,57 +1,18 @@
-//! Console component library. Styling lives in CSS custom properties
-//! (`assets/tokens.css` in console-shell) so tools in iframes can share it.
+//! Console component library (Cloudscape-like) shared by the shell and tools.
+//!
+//! Styling lives in two static stylesheets shipped with this crate:
+//! `assets/tokens.css` (CSS custom properties, light + dark) and
+//! `assets/components.css` (`.cui-*` rules using only tokens). Components never
+//! emit inline styles, so pages work under `style-src 'self'`.
 
-use yew::prelude::*;
+pub mod components;
+pub mod id;
+pub mod logic;
 
-#[derive(Clone, Copy, PartialEq, Default)]
-pub enum Variant {
-    #[default]
-    Normal,
-    Primary,
-    Link,
-}
+pub use components::*;
+pub use logic::Theme;
 
-#[derive(Properties, PartialEq)]
-pub struct ButtonProps {
-    #[prop_or_default]
-    pub variant: Variant,
-    #[prop_or_default]
-    pub disabled: bool,
-    #[prop_or_default]
-    pub onclick: Callback<MouseEvent>,
-    pub children: Html,
-}
-
-#[function_component]
-pub fn Button(props: &ButtonProps) -> Html {
-    let class = match props.variant {
-        Variant::Normal => "cui-btn",
-        Variant::Primary => "cui-btn cui-btn--primary",
-        Variant::Link => "cui-btn cui-btn--link",
-    };
-    html! {
-        <button type="button" {class} disabled={props.disabled} onclick={props.onclick.clone()}>
-            { props.children.clone() }
-        </button>
-    }
-}
-
-#[derive(Properties, PartialEq)]
-pub struct ContainerProps {
-    #[prop_or_default]
-    pub header: Option<AttrValue>,
-    pub children: Html,
-}
-
-/// Bordered content panel with an optional header.
-#[function_component]
-pub fn Container(props: &ContainerProps) -> Html {
-    html! {
-        <section class="cui-container">
-            if let Some(h) = &props.header {
-                <h2 class="cui-container__header">{ h }</h2>
-            }
-            <div class="cui-container__body">{ props.children.clone() }</div>
-        </section>
-    }
-}
+/// Design tokens stylesheet, for tools that copy it into their own dist.
+pub const TOKENS_CSS: &str = include_str!("../assets/tokens.css");
+/// Component stylesheet (requires [`TOKENS_CSS`]).
+pub const COMPONENTS_CSS: &str = include_str!("../assets/components.css");
