@@ -7,8 +7,8 @@ tool hosting: the gateway tool registry, per-tool origins with a
 launch-code handoff, the authenticated reverse proxy, the signed identity
 assertion with a JWKS, the shell tool container, SDK protocol v1 with the
 `console-sdk` transport, and `examples/hello-tool`. The tool contract is in
-[INTEGRATING-A-TOOL.md](INTEGRATING-A-TOOL.md). M4 has not run in CI yet
-(pending push).
+[INTEGRATING-A-TOOL.md](INTEGRATING-A-TOOL.md). M4 is green in
+CI run [41892456284](https://github.com/192d-Wing/usg-ops-console/actions/runs/41892456284).
 
 ## Crates
 
@@ -532,7 +532,7 @@ Latest local runs (M4 QA final round): macOS chromium/webkit projects plus
 (`make e2e-linux`, digest-pinned Playwright 1.64.1 image; chromium,
 firefox, webkit; prodlike excluded), 428 passed, 37 skipped, 3 failed (Linux
 WebKit Keycloak sign-in flake, POAM-044; rerun 43/43). The CI `e2e` job
-has not run M4 yet.
+passed in CI run 41892456284 (1 flaky, POAM-045).
 
 ## Compliance
 

@@ -26,7 +26,7 @@ Firefox and WebKit (268 passed, 0 failed, 4 flaky; POAM-030 closed,
 flakes tracked as POAM-032). M1/M2 rows cite CI run
 [41740455231](https://github.com/192d-Wing/usg-ops-console/actions/runs/41740455231).
 
-**M4 evidence scope.** M4 has **not run in CI** (pending push). M4 rows cite
+**M4 evidence scope.** M4 is green in CI run [41892456284](https://github.com/192d-Wing/usg-ops-console/actions/runs/41892456284) on `75512c9` (all jobs; E2E chromium, firefox, webkit and prodlike). M4 rows cite
 local runs only (QA "Final (round 3)"): `make check` 252 tests passed;
 `make test-integration` 99 passed (56 lib, 9 oidc, 21 `pg_flow`, 13
 `router`); Playwright on macOS (chromium, webkit, idle, ka503, dist,

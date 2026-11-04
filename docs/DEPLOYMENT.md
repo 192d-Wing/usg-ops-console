@@ -1,7 +1,7 @@
 # Deployment
 
-Status as of M4 (tool hosting), 2026-11-04. M4 has not run in CI yet
-(pending push). This covers what a deployment of
+Status as of M4 (tool hosting), 2026-11-04. M4 is green in
+CI run 41892456284. This covers what a deployment of
 `console-gateway` needs today. The Helm chart is not built yet (M7); the
 requirements below are what it must implement. Configuration reference:
 [ARCHITECTURE.md](ARCHITECTURE.md#configuration).

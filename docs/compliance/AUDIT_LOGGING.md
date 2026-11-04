@@ -1,8 +1,8 @@
 # Audit logging
 
 Status as of M4 (tool events, registry events, background audit queue),
-2026-11-04. This file describes what the code does today. M4 has not run
-in CI (pending push); M4 statements cite local runs (`make
+2026-11-04. This file describes what the code does today. M4 is green in
+CI run 41892456284; M4 statements also cite local runs (`make
 test-integration` 99 passed; Playwright macOS 294 passed, Linux container
 428 passed / 3 flaky, POAM-044).
 

@@ -6,9 +6,8 @@ tool. It describes what the code in this repository does today. The
 reference implementation is [examples/hello-tool](../examples/hello-tool/README.md).
 Where the example README and this file differ, this file wins.
 
-M4 evidence is from local runs only (`make check`, `make test-integration`,
-Playwright on macOS and in the pinned Linux container). CI has not run M4
-yet (pending push).
+M4 is verified locally and in CI run [41892456284](https://github.com/192d-Wing/usg-ops-console/actions/runs/41892456284)
+(all jobs, including E2E on Chromium, Firefox and WebKit).
 
 ## Overview
 

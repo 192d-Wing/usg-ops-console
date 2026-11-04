@@ -3,8 +3,8 @@
 Status as of M4 (tool sessions, per-session idle limit, tool refresh
 gating), 2026-11-04. This file describes what the code does today.
 
-**M4 evidence status.** M4 has not run in CI (pending push). M4 statements
-below cite local runs: `make test-integration` 99 passed (21 `pg_flow`),
+**M4 evidence status.** M4 is green in CI run 41892456284. M4 statements
+below also cite local runs: `make test-integration` 99 passed (21 `pg_flow`),
 Playwright macOS 294 passed and Linux container 428 passed / 3 flaky
 (POAM-044). The M3 evidence paragraph below is historical; M3 was later
 confirmed in CI run 41773314457 (POAM-030 closed).
@@ -13,9 +13,9 @@ confirmed in CI run 41773314457 (POAM-030 closed).
 tests, and the 15 `pg_flow` integration tests (`make test-integration`
 against compose Postgres 17, 0 `NOT RUN` lines) passed locally. The
 Playwright suite passed locally on Chromium and WebKit (184 passed, 0
-failed, 13 skipped by design; fix round 2). **Firefox has not run**, and
-the new CI jobs (`gateway-integration`, the compose-based `e2e` job) have
-not run yet (pending push). See POAM-030.
+failed, 13 skipped by design; fix round 2). Firefox and the CI jobs
+(`gateway-integration`, the compose-based `e2e` job) have since run green
+(M3: CI run 41773314457; M4: CI run 41892456284). See POAM-030.
 
 ## Overview
 

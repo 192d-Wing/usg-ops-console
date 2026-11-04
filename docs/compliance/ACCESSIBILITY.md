@@ -2,7 +2,7 @@
 
 Status as of M4, 2026-11-04. Target: WCAG 2.1 AA (Section 508). This file
 holds conformance remarks for a future VPAT. It is not a full VPAT. M4
-evidence is from local runs only; CI has not run M4 yet (pending push).
+evidence is from local runs and CI run 41892456284 (Firefox included).
 
 Related evidence: axe scans (`e2e/tests/a11y.spec.ts`, Chromium only,
 POAM-012), keyboard and reflow specs, the token contrast test
