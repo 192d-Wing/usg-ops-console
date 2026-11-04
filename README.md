@@ -46,7 +46,7 @@ check-no-gallery and deny.
 | `make test-integration` | Gateway tests including the Postgres `pg_flow` tests, against the compose Postgres (`CONSOLE_TEST_DATABASE_URL`). Without a DB those tests print `NOT RUN` |
 | `make wasm-test` | console-ui and console-shell browser tests with wasm-pack (headless Firefox by default; `WASM_BROWSER=chrome` to override). Not part of `make check` |
 | `make e2e-install` | `npm ci` in `e2e/` and installs Playwright browsers (chromium, firefox, webkit) |
-| `make e2e` | Builds `web`, `web-gallery` and `gateway`, runs `up`, then Playwright + axe through the compose Keycloak and Caddy TLS. Playwright starts the host gateways (ports in `deploy/compose/ports.env`). Pass options with `E2E_ARGS`, for example `E2E_ARGS="--project=setup --project=chromium"`. Not part of `make check`. M3 auth specs have run locally on Chromium and WebKit only; Firefox and the CI job have not run them yet |
+| `make e2e` | Builds `web`, `web-gallery` and `gateway`, runs `up`, then Playwright + axe through the compose Keycloak and Caddy TLS. Playwright starts the host gateways (ports in `deploy/compose/ports.env`). Pass options with `E2E_ARGS`, for example `E2E_ARGS="--project=setup --project=chromium"`. Not part of `make check`. CI runs it on Chromium, Firefox and WebKit |
 | `make e2e-typecheck` | `npm ci` and `tsc --noEmit` in `e2e/` |
 
 ## Workflow

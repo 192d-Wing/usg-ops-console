@@ -20,9 +20,10 @@ Status values:
 `make check` green; `make test-integration` against compose Postgres 17
 (`pg_flow` 15/15, 0 `NOT RUN`); Playwright on Chromium and WebKit through the
 compose Keycloak (184 passed, 0 failed, 13 skipped by design, fix round 2).
-**Firefox has not run, and the new CI jobs (`gateway-integration`,
-compose-based `e2e`) have not run yet (pending push).** M3 rows stay
-conditional on the first green CI run (POAM-030). M1/M2 rows cite CI run
+M3 CI evidence: run [41773314457](https://github.com/192d-Wing/usg-ops-console/actions/runs/41773314457) on `d55b641`, all jobs green,
+including `gateway-integration` and the compose-based `e2e` on Chromium,
+Firefox and WebKit (268 passed, 0 failed, 4 flaky; POAM-030 closed,
+flakes tracked as POAM-032). M1/M2 rows cite CI run
 [41740455231](https://github.com/192d-Wing/usg-ops-console/actions/runs/41740455231).
 
 ## Summary
@@ -588,7 +589,7 @@ Chromium-only by design), 0 failed. Local runs (headless Chrome wasm; chromium
 and webkit e2e) agree. POAM-003 to POAM-006 are closed; axe engine scope stays
 open as POAM-012.
 
-M3 additions, **not yet run in CI** (pending push, POAM-030):
+M3 additions, green in CI run [41773314457](https://github.com/192d-Wing/usg-ops-console/actions/runs/41773314457) (POAM-030 closed):
 
 - `gateway-integration`: Postgres service container, `01-roles.sh`,
   `console-gateway migrate` as `console_migrator`, `check-roles.sql`, then
@@ -597,7 +598,8 @@ M3 additions, **not yet run in CI** (pending push, POAM-030):
 - `e2e` now starts the compose stack (Postgres, Keycloak, Caddy TLS) and
   runs the auth specs; `wasm-test` also runs the console-shell wasm tests.
   Locally: Chromium and WebKit 184 passed, 0 failed; console-shell wasm
-  tests 4 passed (headless Chrome). Firefox: not run.
+  tests 4 passed (headless Chrome). CI: e2e 268 passed / 0 failed / 4
+  flaky across all three engines; wasm-test green (headless Firefox).
 
 ## SA-11(1) Static code analysis
 
