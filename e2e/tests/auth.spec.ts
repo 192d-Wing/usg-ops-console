@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 import { TID } from "./fixtures";
 import {
   AUTH_COOKIE, JWT_RE, KC_REALM, NO_AUTH, SID_COOKIE, TOKEN_PARAM_RE, USERS,
-  expectAxeClean, getSession, loginVia, sidCookie, submitKeycloak,
+  expectAxeClean, freshClientIp, getSession, loginVia, sidCookie, submitKeycloak,
 } from "./auth-helpers";
 
 // Every test here owns its session (fresh context): logout must never touch
@@ -13,6 +13,7 @@ test.describe("sign-in", () => {
   test("unauthenticated deep link goes to Keycloak and returns to the same path+query", async ({ page, baseURL }) => {
     const seen: string[] = [];
     page.on("framenavigated", (f) => { if (f === page.mainFrame()) seen.push(f.url()); });
+    await freshClientIp(page);
     await page.goto("/?site=hq&tenant=ops");
     await expect(page).toHaveURL(new RegExp(`^${KC_REALM}/protocol/openid-connect/auth`));
     // PKCE S256 + state + nonce on the authorization request; return_to is server-side only.
@@ -87,6 +88,7 @@ test.describe("sign-in", () => {
   });
 
   test("user without console-user role gets 403 and no session", async ({ page, baseURL, browserName }) => {
+    await freshClientIp(page);
     await page.goto("/");
     const resp = page.waitForResponse((r) => r.url().startsWith(`${baseURL}/callback`));
     await submitKeycloak(page, USERS.noRole);

@@ -122,7 +122,11 @@ function gateway(port: number, publicUrl: string, dist: string, extra: Record<st
       // Caddy's peer is 127.0.0.1 (Linux hostnet) or the podman gvproxy range
       // (10.89.x on macOS); trusting both lets the per-test X-Forwarded-For
       // (E2E_CLIENT_IP below) reach the per-IP limiter. DEV/E2E only.
-      CONSOLE_TRUSTED_PROXIES: "127.0.0.1/32,10.0.0.0/8",
+      // ::1/128: on Linux hostnet (CI) Chromium/WebKit reach Caddy over IPv6
+      // loopback; Caddy (trusted_proxies private_ranges) appends ::1 to XFF and
+      // the gateway keyed every such login on "::1" -> one shared 30/min bucket
+      // (CI run 41874957314: 429 at loginAt). Same loopback hop as 127.0.0.1.
+      CONSOLE_TRUSTED_PROXIES: "127.0.0.1/32,::1/128,10.0.0.0/8",
       ...extra,
     },
     reuseExistingServer: !isCI,

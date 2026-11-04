@@ -31,7 +31,7 @@ Required:
 | `CONSOLE_DATABASE_URL_FILE` | Runtime role `console` |
 | `CONSOLE_AUDIT_DATABASE_URL_FILE` | Audit role `console_audit` |
 | `CONSOLE_REQUIRED_ACR` | The `acr` value(s) icam's CAC/PIV flow emits. Value to be confirmed with the icam admins (POAM-028) |
-| `CONSOLE_TRUSTED_PROXIES` | CIDRs of the ingress/proxy hops, so audit records get the real client IP. Without it the peer address is recorded |
+| `CONSOLE_TRUSTED_PROXIES` | CIDRs of the ingress/proxy hops, so audit records and the `/login` rate limiter get the real client IP. Without it the peer address is recorded. List every address family the proxy actually connects from (for example both `127.0.0.1/32` and `::1/128` for a local proxy): if the proxy connects over IPv6 and only its IPv4 address is listed, every user shares the proxy's address, so one rate-limit bucket and one audit IP |
 
 Optional, with defaults: `CONSOLE_LISTEN` (`0.0.0.0:8080`), `CONSOLE_DIST`,
 `CONSOLE_OIDC_REDIRECT_PATH` (`/callback`), `CONSOLE_OIDC_DISCOVERY_RETRIES`
