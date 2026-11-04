@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { JWT_RE, KC_REALM, NO_AUTH, SID_COOKIE, USERS, getSession, loginVia, sidCookie } from "./auth-helpers";
+import { JWT_RE, KC_REALM, NO_AUTH, SID_COOKIE, USERS, freshClientIp, getSession, loginVia, sidCookie } from "./auth-helpers";
 
 test.use({ storageState: NO_AUTH });
 
@@ -92,6 +92,13 @@ test.describe("open redirect via return_to", () => {
     expect(new URL(page.url()).origin).toBe(origin);
     expect(new URL(page.url()).pathname).toBe("/");
     for (const bad of BAD_RETURN_TO.slice(1)) {
+      // Unload the previous shell first: each /login rotates the session, so
+      // the old page's in-flight /api/session gets 401 and the shell starts
+      // its own /login navigation, aborting ours (CI 41766732456: ERR_ABORTED).
+      await page.goto("about:blank");
+      // 13 /login hits from one IP would trip the per-IP /login limiter (429
+      // on the retry in the same CI run); one TEST-NET IP per bounce.
+      await freshClientIp(page);
       await page.goto(`/login?return_to=${encodeURIComponent(bad)}`);
       // Wait for the whole /login -> IdP -> /callback bounce to settle; the
       // starting /login URL itself must not satisfy the predicate (race).

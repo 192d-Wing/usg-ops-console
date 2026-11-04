@@ -55,7 +55,8 @@ export const E2E_CLIENT_IP = `198.18.${rnd()}.${rnd()}`;
 const SMOKE = /dist-smoke\.spec\.ts$/;
 const IDLE = /idle[^/]*\.spec\.ts$/;
 const SETUP = /auth\.setup\.ts$/;
-export const STORAGE_STATE = ".auth/console_user.json";
+/** One storageState per engine, written by that engine's own setup project. */
+export const storageStateFor = (engine: string) => `.auth/console_user-${engine}.json`;
 const isCI = Boolean(process.env.CI);
 
 function gateway(port: number, publicUrl: string, dist: string, extra: Record<string, string> = {}) {
@@ -68,7 +69,7 @@ function gateway(port: number, publicUrl: string, dist: string, extra: Record<st
       CONSOLE_LISTEN: `${GW_HOST}:${port}`,
       CONSOLE_DIST: dist,
       CONSOLE_PUBLIC_URL: publicUrl,
-      // Main suite: max idle so the shared storageState session survives a
+      // Main suite: max idle so each engine's storageState session survives a
       // full multi-browser run. Idle behaviour is covered by idle.spec.ts.
       CONSOLE_SESSION_IDLE_SECS: "3600",
       // Caddy's peer is 127.0.0.1 (Linux hostnet) or the podman gvproxy range
@@ -84,7 +85,6 @@ function gateway(port: number, publicUrl: string, dist: string, extra: Record<st
   };
 }
 
-const authed = { storageState: STORAGE_STATE };
 export default defineConfig({
   testDir: "./tests",
   fullyParallel: true,
@@ -104,20 +104,35 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   projects: [
-    { name: "setup", testMatch: SETUP, use: { ...devices["Desktop Chrome"] } },
     ...(["chromium", "firefox", "webkit"] as const).flatMap((b) => {
       const dev = devices[b === "chromium" ? "Desktop Chrome" : b === "firefox" ? "Desktop Firefox" : "Desktop Safari"];
+      // Each engine signs in with its own browser and its own storageState
+      // file/session: no server-side session is shared across engines.
+      const setup = `setup-${b}`;
+      const authed = { storageState: storageStateFor(b) };
       return [
-        { name: b, testIgnore: [SMOKE, IDLE, SETUP], dependencies: ["setup"], use: { ...dev, ...authed } },
+        { name: setup, testMatch: SETUP, use: { ...dev } },
+        { name: b, testIgnore: [SMOKE, IDLE, SETUP], dependencies: [setup], use: { ...dev, ...authed } },
         { name: `idle-${b}`, testMatch: IDLE, use: { ...dev, baseURL: ORIGINS.idle } },
-        { name: `dist-${b}`, testMatch: SMOKE, dependencies: ["setup"], use: { ...dev, ...authed, baseURL: ORIGINS.dist } },
+        { name: `dist-${b}`, testMatch: SMOKE, dependencies: [setup], use: { ...dev, ...authed, baseURL: ORIGINS.dist } },
       ];
     }),
   ],
   webServer: [
     gateway(gw("MAIN"), ORIGINS.main, "../crates/console-shell/dist-gallery"),
     gateway(gw("DIST"), ORIGINS.dist, "../crates/console-shell/dist"),
-    gateway(gw("IDLE"), ORIGINS.idle, "../crates/console-shell/dist-gallery", { CONSOLE_SESSION_IDLE_SECS: String(IDLE_SECS) }),
+    // All gateways share one Postgres `sessions` table and each runs the
+    // sweeper with ITS OWN idle limit. With the default 60 s interval the
+    // IDLE gateway (150 s) deleted every main-suite session not keepalive'd
+    // for 150 s, incl. the setup storageState session (CI run 41766732456:
+    // ref 6a1684c1 minted 03:27:39, swept 03:30:36, all later webkit tests
+    // bounced to Keycloak). Idle specs check expiry at request time, not via
+    // the sweeper, so push its sweep out to the 3600 s maximum (first tick is
+    // at startup, before any test session exists).
+    gateway(gw("IDLE"), ORIGINS.idle, "../crates/console-shell/dist-gallery", {
+      CONSOLE_SESSION_IDLE_SECS: String(IDLE_SECS),
+      CONSOLE_SWEEP_INTERVAL_SECS: "3600",
+    }),
     gateway(gw("ACR"), ORIGINS.acr, "../crates/console-shell/dist-gallery", { CONSOLE_REQUIRED_ACR: UNMET_ACR }),
     // SEC NIT-1: limiter gateways use the production trust list (gateway.env.example:
     // 127.0.0.1/32), not the dev/E2E 10/8 widening. RL_UNTRUSTED trusts no proxy, so
