@@ -1,15 +1,19 @@
 //! Console shell entry point: chrome, routing, flash notifications, and theme.
 //! Demo registry and scope picker in M2; real registry and iframe container in M4.
 
+mod api;
 mod chrome;
 mod ctx;
 mod demo;
 #[cfg(feature = "gallery")]
 mod gallery;
+mod idle;
 mod scope;
+mod session;
 mod theme;
 
-pub use ctx::{PageMeta, ScopeCtx, ShellCtx, use_page_meta};
+pub use ctx::{PageMeta, ScopeCtx, SessionCtx, ShellCtx, use_page_meta};
+use session::SessionInfo;
 
 use console_protocol::Scope;
 use console_ui::{
@@ -151,7 +155,7 @@ fn nav_items() -> Vec<SideNavItem> {
 /// slash becomes `/`. Without this, a crafted pathname like `//evil.example/`
 /// resolves cross-origin and `pushState` throws, which gloo-history turns
 /// into a panic (SEC-001; NIST 800-53 SI-10, SI-11).
-fn same_origin_url(url: &str) -> String {
+pub(crate) fn same_origin_url(url: &str) -> String {
     let rest = url.trim_start_matches(['/', '\\']);
     if rest.len() == url.len() {
         return "/".to_owned();
@@ -173,7 +177,7 @@ fn history_go(url: &str, replace: bool) {
 
 /// Current `location.pathname`, `search` and `hash`, read at call time so
 /// callbacks need not be rebuilt on every location change (PERF-003).
-fn current_location() -> (String, String, String) {
+pub(crate) fn current_location() -> (String, String, String) {
     web_sys::window()
         .map(|w| w.location())
         .map(|l| {
@@ -225,7 +229,7 @@ impl Reducible for Flashes {
     }
 }
 
-fn focus_selector(sel: &str) {
+pub(crate) fn focus_selector(sel: &str) {
     use web_sys::wasm_bindgen::JsCast;
     if let Some(el) = web_sys::window()
         .and_then(|w| w.document())
@@ -282,6 +286,237 @@ fn use_wide(flash: Callback<(AlertKind, AttrValue)>) -> bool {
         });
     }
     *wide
+}
+
+/// `window.location.origin` (empty if unavailable, which matches nothing).
+fn own_origin() -> String {
+    web_sys::window()
+        .and_then(|w| w.location().origin().ok())
+        .unwrap_or_default()
+}
+
+/// Reads `console_notice`, set by the gateway on `return_to` after a sign-in
+/// that followed an expiry or revocation (CONTRACT DELTA 8). No side effects:
+/// [`strip_url_notice`] removes it from the URL after the first render.
+fn read_url_notice() -> Option<session::LoginNotice> {
+    let (_, search, _) = current_location();
+    session::take_param(&search, session::NOTICE_PARAM)
+        .0
+        .and_then(|v| session::LoginNotice::parse(&v))
+}
+
+/// Strips only `console_notice` from the URL, without a new history entry.
+fn strip_url_notice() {
+    let (path, search, hash) = current_location();
+    if let (Some(_), rest) = session::take_param(&search, session::NOTICE_PARAM) {
+        history_go(&format!("{path}{rest}{hash}"), true);
+    }
+}
+
+/// Session snapshot plus the client clock when it arrived (for skew).
+#[derive(Clone, PartialEq)]
+enum SessionState {
+    Loading,
+    Ready {
+        info: Rc<SessionInfo>,
+        received_at: i64,
+    },
+    /// Non-401 failure, already shown in the flashbar.
+    Failed,
+}
+
+fn now_ms() -> i64 {
+    js_sys::Date::now() as i64
+}
+
+/// Loads `/api/session` on mount and when the tab becomes visible (so a
+/// background tab notices a logout from another tab), and provides
+/// keepalive / sign-out. A 401 navigates to login inside `api`.
+#[hook]
+fn use_session(
+    flash: Callback<(AlertKind, AttrValue)>,
+) -> (SessionState, SessionCtx, Option<AttrValue>) {
+    let state = use_state(|| SessionState::Loading);
+    let busy = use_state(|| false);
+    let signing_out = use_state(|| false);
+    let keepalive_error = use_state(|| None::<AttrValue>);
+    // Explanation for the redirect that brought the user here (A11Y-7,
+    // NIST-001); shown once the new session has loaded.
+    let notice = use_mut_ref(read_url_notice);
+    use_effect_with((), |_| strip_url_notice());
+    let load = use_callback(
+        (state.setter(), flash.clone(), notice),
+        |(), (set, flash, notice)| {
+            let (set, flash, notice) = (set.clone(), flash.clone(), notice.clone());
+            yew::platform::spawn_local(async move {
+                match api::get_session().await {
+                    Ok(info) => {
+                        set.set(SessionState::Ready {
+                            info: Rc::new(info),
+                            received_at: now_ms(),
+                        });
+                        if let Some(n) = notice.borrow_mut().take() {
+                            flash.emit((AlertKind::Info, n.message().into()));
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(m) = e.message("Session") {
+                            flash.emit((AlertKind::Error, m.into()));
+                            set.set(SessionState::Failed);
+                        }
+                    }
+                }
+            });
+        },
+    );
+    {
+        let load = load.clone();
+        let flash = flash.clone();
+        use_effect_with((), move |_| {
+            use web_sys::wasm_bindgen::{JsCast, closure::Closure};
+            load.emit(());
+            let doc = web_sys::window().and_then(|w| w.document());
+            let cb = Closure::<dyn Fn()>::new(move || {
+                let visible = web_sys::window()
+                    .and_then(|w| w.document())
+                    .is_some_and(|d| d.visibility_state() == web_sys::VisibilityState::Visible);
+                if visible {
+                    load.emit(());
+                }
+            });
+            let registered = doc.as_ref().is_some_and(|d| {
+                d.add_event_listener_with_callback("visibilitychange", cb.as_ref().unchecked_ref())
+                    .is_ok()
+            });
+            if !registered {
+                flash.emit((
+                    AlertKind::Warning,
+                    "Session: sign-out in other tabs is detected only on the next request".into(),
+                ));
+            }
+            move || {
+                if let Some(d) = doc {
+                    let _ = d.remove_event_listener_with_callback(
+                        "visibilitychange",
+                        cb.as_ref().unchecked_ref(),
+                    );
+                }
+            }
+        });
+    }
+    let retry = use_callback((state.setter(), load.clone()), |(), (set, load)| {
+        set.set(SessionState::Loading);
+        load.emit(());
+    });
+    let csrf = match &*state {
+        SessionState::Ready { info, .. } => Some(AttrValue::from(info.csrf_token.clone())),
+        _ => None,
+    };
+    let keepalive = use_callback(
+        (
+            csrf.clone(),
+            state.setter(),
+            busy.setter(),
+            keepalive_error.setter(),
+        ),
+        |(), (csrf, set, set_busy, set_err)| {
+            let Some(csrf) = csrf.clone() else { return };
+            let (set, set_busy, set_err) = (set.clone(), set_busy.clone(), set_err.clone());
+            set_busy.set(true);
+            set_err.set(None);
+            yew::platform::spawn_local(async move {
+                match api::keepalive(&csrf).await {
+                    Ok(info) => set.set(SessionState::Ready {
+                        info: Rc::new(info),
+                        received_at: now_ms(),
+                    }),
+                    // 401 (revoked, de-roled, expired): `api` is already
+                    // navigating to login with a notice for the next load.
+                    Err(e) => {
+                        set_err.set(e.message("Could not extend your session").map(|m| {
+                            AttrValue::from(format!("{m}. Try again, or save your work."))
+                        }))
+                    }
+                }
+                set_busy.set(false);
+            });
+        },
+    );
+    let sign_out = use_callback(
+        (csrf, busy.setter(), signing_out.setter(), flash),
+        |(), (csrf, set_busy, set_signing_out, flash)| {
+            let Some(csrf) = csrf.clone() else {
+                flash.emit((AlertKind::Error, "Sign out: session not loaded yet".into()));
+                return;
+            };
+            let (set_busy, set_signing_out, flash) =
+                (set_busy.clone(), set_signing_out.clone(), flash.clone());
+            set_busy.set(true);
+            set_signing_out.set(true);
+            yew::platform::spawn_local(async move {
+                match api::logout(&csrf).await {
+                    Ok(r) => match (
+                        session::accept_logout_redirect(
+                            &r.redirect,
+                            r.end_session_origin.as_deref(),
+                            &own_origin(),
+                        ),
+                        web_sys::window(),
+                    ) {
+                        // `replace`: the end-session URL (with id_token_hint)
+                        // stays out of session history (SEC-003).
+                        (Some(url), Some(w)) => {
+                            if w.location().replace(url).is_err() {
+                                flash.emit((
+                                    AlertKind::Error,
+                                    "Sign out: could not open the sign-out page".into(),
+                                ));
+                            } else {
+                                return;
+                            }
+                        }
+                        _ => flash.emit((
+                            AlertKind::Error,
+                            "Sign out: the server returned an invalid redirect. You are signed out of the console; close the browser to end single sign-on.".into(),
+                        )),
+                    },
+                    Err(e) => {
+                        if let Some(m) = e.message("Sign out failed") {
+                            flash.emit((AlertKind::Error, m.into()));
+                        }
+                    }
+                }
+                set_busy.set(false);
+                set_signing_out.set(false);
+            });
+        },
+    );
+    let session = match &*state {
+        SessionState::Ready { info, .. } => Some(info.clone()),
+        _ => None,
+    };
+    let failed = matches!(*state, SessionState::Failed);
+    let ctx = use_memo(
+        (
+            session,
+            keepalive,
+            sign_out,
+            retry,
+            *busy,
+            *signing_out,
+            failed,
+        ),
+        |(session, keepalive, sign_out, retry, busy, signing_out, failed)| SessionCtx {
+            session: session.clone(),
+            keepalive: keepalive.clone(),
+            sign_out: sign_out.clone(),
+            retry: retry.clone(),
+            busy: *busy,
+            signing_out: *signing_out,
+            failed: *failed,
+        },
+    );
+    ((*state).clone(), (*ctx).clone(), (*keepalive_error).clone())
 }
 
 #[function_component]
@@ -374,6 +609,21 @@ fn Shell() -> Html {
     }
 
     // --- Side navigation collapse below 45rem (A11Y-008).
+    let (session_state, session_ctx, keepalive_error) = use_session(flash.clone());
+    let idle_watch = match &session_state {
+        SessionState::Ready { info, received_at } => html! {
+            <idle::IdleWatch session={info.clone()} received_at={*received_at}
+                busy={session_ctx.busy} {keepalive_error}
+                on_keepalive={session_ctx.keepalive.clone()}
+                on_sign_out={session_ctx.sign_out.clone()} flash={flash.clone()} />
+        },
+        // Same (empty) live region, so it exists before any announcement.
+        _ => html! {
+            <div class="cui-visually-hidden" role="status" aria-live="polite" aria-atomic="true"
+                data-testid="idle-announcer"></div>
+        },
+    };
+
     let wide = use_wide(flash.clone());
     let nav_open = use_state(|| false);
     let nav_hidden = !wide && !*nav_open;
@@ -429,6 +679,7 @@ fn Shell() -> Html {
 
     html! {
         <ContextProvider<ShellCtx> context={(*ctx).clone()}>
+        <ContextProvider<SessionCtx> context={session_ctx}>
         <ContextProvider<ScopeCtx> context={(*scope_ctx).clone()}>
             <div class="app" id={APP_CHROME_ID}>
                 <a class="skip-link" href="#main-content">{ "Skip to main content" }</a>
@@ -479,7 +730,9 @@ fn Shell() -> Html {
                 </div>
             </div>
             <div id="modal-root" />
+            { idle_watch }
         </ContextProvider<ScopeCtx>>
+        </ContextProvider<SessionCtx>>
         </ContextProvider<ShellCtx>>
     }
 }

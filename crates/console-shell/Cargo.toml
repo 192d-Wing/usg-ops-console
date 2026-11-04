@@ -11,7 +11,15 @@ console-protocol.workspace = true
 console-ui.workspace = true
 yew.workspace = true
 yew-router.workspace = true
-web-sys = { workspace = true, features = ["Window", "Document", "Element", "Storage", "HtmlElement", "MediaQueryList", "Location"] }
+web-sys = { workspace = true, features = ["Window", "Document", "Element", "Storage", "HtmlElement", "MediaQueryList", "Location", "Request", "RequestInit", "RequestCredentials", "Response", "Headers", "VisibilityState"] }
+js-sys.workspace = true
+wasm-bindgen-futures.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test.workspace = true
 
 [lints]
 workspace = true

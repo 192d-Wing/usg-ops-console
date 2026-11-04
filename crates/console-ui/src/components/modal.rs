@@ -56,8 +56,22 @@ pub struct ModalProps {
     pub header: AttrValue,
     #[prop_or_default]
     pub footer: Option<Html>,
-    /// Fired on Esc, the close button, or an overlay click.
+    /// Fired on Esc, the close button, or (if `dismiss_on_overlay`) an
+    /// overlay click.
     pub on_dismiss: Callback<()>,
+    /// Whether a click on the backdrop fires `on_dismiss`. Set `false` when
+    /// dismissing has side effects a stray click must not trigger (e.g. the
+    /// idle dialog, where dismiss = "Stay signed in"; NIST 800-53 AC-11).
+    #[prop_or(true)]
+    pub dismiss_on_overlay: bool,
+    /// Whether to render the header close (X) button. When `false`, Esc still
+    /// fires `on_dismiss`; the footer must offer an explicit action.
+    #[prop_or(true)]
+    pub close_button: bool,
+    /// Accessible name of the close button (default "Close dialog"). Name it
+    /// after what `on_dismiss` actually does (WCAG 4.1.2).
+    #[prop_or_default]
+    pub close_label: Option<AttrValue>,
     /// Id of the background region (outside the modal's DOM subtree) to mark
     /// `inert` while visible. The Modal clears it *before* restoring focus to
     /// the opener, so focus restoration is deterministic.
@@ -152,7 +166,13 @@ pub fn Modal(props: &ModalProps) -> Html {
         })
     };
     let close = props.on_dismiss.reform(|_: MouseEvent| ());
-    let overlay = props.on_dismiss.reform(|_: MouseEvent| ());
+    let overlay = props
+        .dismiss_on_overlay
+        .then(|| props.on_dismiss.reform(|_: MouseEvent| ()));
+    let close_label = props
+        .close_label
+        .clone()
+        .unwrap_or(AttrValue::Static("Close dialog"));
 
     html! {
         <div class="cui-modal" data-testid={props.testid.clone()}>
@@ -168,9 +188,11 @@ pub fn Modal(props: &ModalProps) -> Html {
             >
                 <div class="cui-modal__header">
                     <h2 class="cui-modal__title" id={title_id}>{ props.header.clone() }</h2>
-                    <button type="button" class="cui-icon-btn" aria-label="Close dialog" onclick={close}>
-                        <span aria-hidden="true">{ "\u{2715}" }</span>
-                    </button>
+                    if props.close_button {
+                        <button type="button" class="cui-icon-btn" aria-label={close_label} onclick={close}>
+                            <span aria-hidden="true">{ "\u{2715}" }</span>
+                        </button>
+                    }
                 </div>
                 <div class="cui-modal__body">{ props.children.clone() }</div>
                 if let Some(f) = &props.footer {

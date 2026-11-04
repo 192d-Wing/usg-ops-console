@@ -1,0 +1,9 @@
+{
+  "user": { "id": "3f1c2a9e-0000-4000-8000-000000000001", "username": "jdoe", "display_name": "Jane Doe" },
+  "roles": ["console-user"],
+  "idle_expires_at": "2026-11-03T18:15:00Z",
+  "absolute_expires_at": "2026-11-04T06:00:00Z",
+  "idle_timeout_secs": 900,
+  "server_time": "2026-11-03T18:00:00Z",
+  "csrf_token": "q1w2e3r4t5y6u7i8o9p0a1s2d3f4g5h6j7k8l9z0x1c"
+}

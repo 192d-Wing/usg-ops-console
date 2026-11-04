@@ -692,3 +692,84 @@ async fn select_value_follows_selected_after_user_change() {
     tick().await;
     assert_eq!(sel.value(), "");
 }
+
+/// A11Y-1/NIST-003: `dismiss_on_overlay=false` ignores backdrop clicks;
+/// `close_button=false` renders no X; Esc still dismisses.
+#[wasm_bindgen_test]
+async fn modal_overlay_click_can_be_disabled() {
+    thread_local! { static DISMISSED: Cell<u32> = const { Cell::new(0) }; }
+    #[function_component]
+    fn T() -> Html {
+        let on_dismiss = Callback::from(|_| DISMISSED.with(|d| d.set(d.get() + 1)));
+        html! {
+            <Modal visible=true header="Hi" {on_dismiss} dismiss_on_overlay=false
+                close_button=false>{ "Body" }</Modal>
+        }
+    }
+    let host = mount::<T>(());
+    tick().await;
+    q(&host, ".cui-modal__overlay")
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    assert_eq!(DISMISSED.with(Cell::get), 0);
+    assert!(host.query_selector(".cui-icon-btn").unwrap().is_none());
+    key(&q(&host, "[role=dialog]"), "Escape");
+    tick().await;
+    assert_eq!(DISMISSED.with(Cell::get), 1);
+}
+
+/// Default Modal: overlay click dismisses and the X has the given name.
+#[wasm_bindgen_test]
+async fn modal_overlay_click_dismisses_by_default() {
+    thread_local! { static DISMISSED: Cell<u32> = const { Cell::new(0) }; }
+    #[function_component]
+    fn T() -> Html {
+        let on_dismiss = Callback::from(|_| DISMISSED.with(|d| d.set(d.get() + 1)));
+        html! {
+            <Modal visible=true header="Hi" {on_dismiss}
+                close_label={AttrValue::Static("Stay signed in")}>{ "Body" }</Modal>
+        }
+    }
+    let host = mount::<T>(());
+    tick().await;
+    assert_eq!(
+        q(&host, ".cui-icon-btn")
+            .get_attribute("aria-label")
+            .as_deref(),
+        Some("Stay signed in")
+    );
+    q(&host, ".cui-modal__overlay")
+        .dyn_into::<HtmlElement>()
+        .unwrap()
+        .click();
+    tick().await;
+    assert_eq!(DISMISSED.with(Cell::get), 1);
+}
+
+/// A11Y-2: `keep_focus` buttons stay focusable while loading and ignore clicks.
+#[wasm_bindgen_test]
+async fn button_keep_focus_loading_stays_focusable() {
+    thread_local! { static CLICKS: Cell<u32> = const { Cell::new(0) }; }
+    #[function_component]
+    fn T() -> Html {
+        let onclick = Callback::from(|_: MouseEvent| CLICKS.with(|c| c.set(c.get() + 1)));
+        html! { <Button loading=true keep_focus=true {onclick}>{ "Stay" }</Button> }
+    }
+    let host = mount::<T>(());
+    tick().await;
+    let b = q(&host, "button").dyn_into::<HtmlElement>().unwrap();
+    assert!(!b.has_attribute("disabled"));
+    assert_eq!(b.get_attribute("aria-disabled").as_deref(), Some("true"));
+    assert_eq!(b.get_attribute("aria-busy").as_deref(), Some("true"));
+    b.focus().unwrap();
+    let doc = web_sys::window().unwrap().document().unwrap();
+    assert_eq!(
+        doc.active_element(),
+        Some(b.clone().unchecked_into::<Element>())
+    );
+    b.click();
+    tick().await;
+    assert_eq!(CLICKS.with(Cell::get), 0);
+}

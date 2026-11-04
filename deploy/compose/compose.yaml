@@ -1,0 +1,131 @@
+# Local dev / E2E stack for usg-ops-console (M3). DEV ONLY - never deploy.
+#
+#   make up        postgres + keycloak + tls-proxy (default)
+#   make run       gateway on the host behind https://localhost:$CONSOLE_TLS_PORT_RUN
+#   make e2e       Playwright against host gateways behind the other TLS ports
+#
+# Ports: deploy/compose/ports.env is the single source (Makefile passes it via
+# --env-file; Playwright reads it). Without make:
+#   podman compose --env-file deploy/compose/ports.env -f deploy/compose/compose.yaml up -d
+#   COMPOSE_PROFILES=full  also runs the containerised gateway (network_mode: host)
+#
+# Why a TLS proxy: the session cookie is `__Host-console_sid; Secure`. WebKit
+# drops Secure cookies on http://localhost (verified 2026-11-03, Playwright
+# 1.64.1 WebKit), and the cookie must never be weakened, so the gateways are
+# only reached by browsers through Caddy (`tls internal`, self-signed local CA).
+#
+# Keycloak stays on plain http://localhost:8180 so the issuer is the same
+# string for the browser and the host-run gateway (iss check).
+#
+# On Linux docker (CI), add `-f compose.hostnet.yaml` so Caddy can reach
+# gateways bound to 127.0.0.1 on the host.
+name: usg-ops-console
+
+services:
+  postgres:
+    # postgres:17-alpine (multi-arch index digest, resolved 2026-11-03)
+    image: docker.io/library/postgres:17-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b
+    environment:
+      # DEV ONLY passwords. Override via env for anything shared.
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${CONSOLE_PG_SUPERUSER_PASSWORD:-dev-only-postgres}
+      POSTGRES_DB: postgres
+      CONSOLE_DB_NAME: console
+      CONSOLE_APP_ROLE: console
+      CONSOLE_APP_PASSWORD: ${CONSOLE_APP_DB_PASSWORD:-dev-only-console-db}
+      CONSOLE_AUDIT_ROLE: console_audit
+      CONSOLE_AUDIT_PASSWORD: ${CONSOLE_AUDIT_DB_PASSWORD:-dev-only-audit-db}
+      CONSOLE_MIGRATOR_ROLE: console_migrator
+      CONSOLE_MIGRATOR_PASSWORD: ${CONSOLE_MIGRATOR_DB_PASSWORD:-dev-only-migrator-db}
+    volumes:
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro,Z
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "127.0.0.1:${CONSOLE_PG_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d console"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  keycloak:
+    # keycloak 26.8.1 (index digest, resolved 2026-11-03)
+    image: quay.io/keycloak/keycloak:26.8.1@sha256:3f3c5f8e03c614774b4bd9173b88391fefa4153bfc010d8012d59ad825377332
+    command: ["start-dev", "--import-realm", "--http-port=8180"]
+    environment:
+      # DEV ONLY bootstrap admin.
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: ${KC_ADMIN_PASSWORD:-dev-only-admin}
+      # Same issuer string for browser and host gateway.
+      KC_HOSTNAME: http://localhost:8180
+      KC_HOSTNAME_STRICT: "true"
+      KC_HEALTH_ENABLED: "true"
+      # Realm-import placeholders (${...} in realm-dev.json redirect URIs).
+      CONSOLE_TLS_PORT_RUN: ${CONSOLE_TLS_PORT_RUN:?use --env-file deploy/compose/ports.env}
+      CONSOLE_TLS_PORT_MAIN: ${CONSOLE_TLS_PORT_MAIN:?use --env-file deploy/compose/ports.env}
+      CONSOLE_TLS_PORT_DIST: ${CONSOLE_TLS_PORT_DIST:?use --env-file deploy/compose/ports.env}
+      CONSOLE_TLS_PORT_IDLE: ${CONSOLE_TLS_PORT_IDLE:?use --env-file deploy/compose/ports.env}
+      CONSOLE_TLS_PORT_ACR: ${CONSOLE_TLS_PORT_ACR:?use --env-file deploy/compose/ports.env}
+    volumes:
+      - ./keycloak/realm-dev.json:/opt/keycloak/data/import/realm-dev.json:ro,Z
+    ports:
+      - "127.0.0.1:8180:8180"
+    healthcheck:
+      # The image has no curl; use bash /dev/tcp against the management port.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && printf 'GET /health/ready HTTP/1.0\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q '\"UP\"' <&3"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 20s
+
+  tls-proxy:
+    # caddy:2-alpine (multi-arch index digest, resolved 2026-11-03)
+    image: docker.io/library/caddy:2-alpine@sha256:e70b164da81ef698b3ad19af799ea6086ce6d9e48ed4079eb9fe26f6fbf14ee5
+    environment:
+      # Where the host-run gateways are reachable from inside the container.
+      UPSTREAM_HOST: ${CONSOLE_UPSTREAM_HOST:-host.containers.internal}
+      CONSOLE_TLS_PORT_RUN: ${CONSOLE_TLS_PORT_RUN:?use --env-file deploy/compose/ports.env}
+      CONSOLE_GW_PORT_RUN: ${CONSOLE_GW_PORT_RUN:?use --env-file deploy/compose/ports.env}
+      CONSOLE_TLS_PORT_MAIN: ${CONSOLE_TLS_PORT_MAIN:?use --env-file deploy/compose/ports.env}
+      CONSOLE_GW_PORT_MAIN: ${CONSOLE_GW_PORT_MAIN:?use --env-file deploy/compose/ports.env}
+      CONSOLE_TLS_PORT_DIST: ${CONSOLE_TLS_PORT_DIST:?use --env-file deploy/compose/ports.env}
+      CONSOLE_GW_PORT_DIST: ${CONSOLE_GW_PORT_DIST:?use --env-file deploy/compose/ports.env}
+      CONSOLE_TLS_PORT_IDLE: ${CONSOLE_TLS_PORT_IDLE:?use --env-file deploy/compose/ports.env}
+      CONSOLE_GW_PORT_IDLE: ${CONSOLE_GW_PORT_IDLE:?use --env-file deploy/compose/ports.env}
+      CONSOLE_TLS_PORT_ACR: ${CONSOLE_TLS_PORT_ACR:?use --env-file deploy/compose/ports.env}
+      CONSOLE_GW_PORT_ACR: ${CONSOLE_GW_PORT_ACR:?use --env-file deploy/compose/ports.env}
+    extra_hosts:
+      - "host.containers.internal:host-gateway"
+    volumes:
+      - ./caddy/Caddyfile:/etc/caddy/Caddyfile:ro,Z
+      - caddydata:/data
+    ports:
+      # Same container and host port so Host/Origin match the public URL.
+      - "127.0.0.1:${CONSOLE_TLS_PORT_RUN}:${CONSOLE_TLS_PORT_RUN}"     # make run
+      - "127.0.0.1:${CONSOLE_TLS_PORT_MAIN}:${CONSOLE_TLS_PORT_MAIN}"   # e2e main (dist-gallery)
+      - "127.0.0.1:${CONSOLE_TLS_PORT_DIST}:${CONSOLE_TLS_PORT_DIST}"   # e2e release dist smoke
+      - "127.0.0.1:${CONSOLE_TLS_PORT_IDLE}:${CONSOLE_TLS_PORT_IDLE}"   # e2e idle (short idle)
+      - "127.0.0.1:${CONSOLE_TLS_PORT_ACR}:${CONSOLE_TLS_PORT_ACR}"     # e2e acr-mismatch gateway
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 $$CONSOLE_TLS_PORT_MAIN"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  gateway:
+    profiles: ["full"]
+    build:
+      context: ../..
+      dockerfile: deploy/Containerfile
+    network_mode: host
+    env_file: [gateway.env.example]
+    environment:
+      CONSOLE_LISTEN: 127.0.0.1:${CONSOLE_GW_PORT_RUN:?use --env-file deploy/compose/ports.env}
+      CONSOLE_PUBLIC_URL: https://localhost:${CONSOLE_TLS_PORT_RUN:?use --env-file deploy/compose/ports.env}
+    depends_on:
+      postgres: { condition: service_healthy }
+      keycloak: { condition: service_healthy }
+
+volumes:
+  pgdata: {}
+  caddydata: {}

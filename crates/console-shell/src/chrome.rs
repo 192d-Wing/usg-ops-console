@@ -1,8 +1,8 @@
 //! Console chrome pieces composed into the top navigation: service menu,
 //! global search, user menu and the cascading scope picker.
 
-use crate::ctx::ScopeCtx;
-use crate::demo::{self, DEMO_USER, SERVICES, SITES};
+use crate::ctx::{ScopeCtx, SessionCtx};
+use crate::demo::{self, SERVICES, SITES};
 use crate::scope::{self, find_site, find_tenant};
 use console_ui::{
     AlertKind, Dropdown, DropdownItem, FieldIds, FormField, OnFollow, SearchInput, Select,
@@ -58,28 +58,83 @@ pub struct FlashProps {
     pub flash: Flash,
 }
 
-/// Static demo identity until M3; labelled "(demo)" so it is not mistaken for
-/// a real session (AC-14).
+/// Signed-in user from `/api/session`. A skeleton is shown while the session
+/// loads so first paint is not blocked on it; a "Session unavailable" menu
+/// with Retry and a sign-in link if loading failed (A11Y-3).
 #[function_component]
 pub fn UserMenu(p: &FlashProps) -> Html {
+    let ctx = use_context::<SessionCtx>();
     let on_action = {
         let flash = p.flash.clone();
-        Callback::from(move |id: AttrValue| {
-            let msg = match id.as_str() {
-                "sign-out" => "Sign-in arrives in M3",
-                _ => "Profile is not available yet",
-            };
-            flash.emit((AlertKind::Info, AttrValue::Static(msg)));
-        })
+        let sign_out = ctx.as_ref().map(|c| c.sign_out.clone());
+        let retry = ctx.as_ref().map(|c| c.retry.clone());
+        Callback::from(
+            move |id: AttrValue| match (id.as_str(), &sign_out, &retry) {
+                ("sign-out", Some(s), _) => s.emit(()),
+                ("retry", _, Some(r)) => r.emit(()),
+                _ => flash.emit((
+                    AlertKind::Info,
+                    AttrValue::Static("Profile is not available yet"),
+                )),
+            },
+        )
     };
-    let label = AttrValue::from(format!("{} (demo)", DEMO_USER.display_name));
+    let signing_out = ctx.as_ref().is_some_and(|c| c.signing_out);
+    // Always mounted so the change to "Signing out…" is announced (A11Y-8).
+    let status = html! {
+        <span class="cui-visually-hidden" role="status" aria-live="polite"
+            data-testid="user-menu-status">
+            if signing_out { { "Signing out\u{2026}" } }
+        </span>
+    };
+    let failed = ctx.as_ref().is_some_and(|c| c.failed);
+    let Some(info) = ctx.and_then(|c| c.session) else {
+        if failed {
+            let (path, search, _) = crate::current_location();
+            let login = crate::session::login_url(&path, &search, None);
+            return html! {
+                <>
+                    <Dropdown label="Session unavailable" align_end=true {on_action}
+                        test_id="user-menu-failed"
+                        items={vec![
+                            DropdownItem::Action { id: "retry".into(), text: "Retry".into() },
+                            DropdownItem::Link {
+                                id: "sign-in".into(),
+                                text: "Sign in".into(),
+                                href: login.into(),
+                                description: None,
+                            },
+                        ]} />
+                    { status }
+                </>
+            };
+        }
+        return html! {
+            <>
+                <span class="user-menu-skeleton" data-testid="user-menu-loading">
+                    <span class="cui-visually-hidden">{ "Loading user" }</span>
+                </span>
+                { status }
+            </>
+        };
+    };
+    let label = AttrValue::from(info.user.display_name.clone());
+    let aria_label = AttrValue::from(format!("{}, user menu", info.user.display_name));
     html! {
-        <Dropdown {label} align_end=true {on_action} test_id="user-menu"
-            items={vec![
-                DropdownItem::Action { id: "profile".into(), text: "Profile (not available yet)".into() },
-                DropdownItem::Divider,
-                DropdownItem::Action { id: "sign-out".into(), text: "Sign out".into() },
-            ]} />
+        <>
+            <Dropdown {label} {aria_label} align_end=true {on_action} test_id="user-menu"
+                items={vec![
+                    DropdownItem::Group {
+                        text: format!("Signed in as {}", info.user.username).into(),
+                        items: vec![
+                            DropdownItem::Action { id: "profile".into(), text: "Profile (not available yet)".into() },
+                        ],
+                    },
+                    DropdownItem::Divider,
+                    DropdownItem::Action { id: "sign-out".into(), text: "Sign out".into() },
+                ]} />
+            { status }
+        </>
     }
 }
 

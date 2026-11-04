@@ -8,6 +8,10 @@ yanked = "deny"
 ignore = [
   { id = "RUSTSEC-2024-0370", reason = "proc-macro-error via yew-macro (build-time only)" },
   { id = "RUSTSEC-2025-0141", reason = "bincode 1.x via gloo-worker; console does not use yew workers" },
+  # POAM: rsa 0.9 (via openidconnect) has no constant-time private-key ops. The gateway only VERIFIES
+  # id_token signatures with the IdP's public keys; no private RSA key exists at runtime (test-only signing).
+  # Re-check when openidconnect moves to a patched rsa.
+  { id = "RUSTSEC-2023-0071", reason = "Marvin: private-key timing only; gateway uses rsa for public-key signature verification" },
 ]
 
 [licenses]

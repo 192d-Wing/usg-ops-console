@@ -71,14 +71,14 @@
   transition: background-color var(--cui-motion-duration-fast) var(--cui-motion-easing),
     color var(--cui-motion-duration-fast) var(--cui-motion-easing);
 }
-.cui-btn:hover:not(:disabled) {
+.cui-btn:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--cui-color-accent-subtle);
 }
 .cui-btn--primary {
   color: var(--cui-color-on-accent);
   background: var(--cui-color-accent);
 }
-.cui-btn--primary:hover:not(:disabled) {
+.cui-btn--primary:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--cui-color-accent-hover);
   border-color: var(--cui-color-accent-hover);
 }
@@ -87,20 +87,23 @@
   background: transparent;
   padding-inline: var(--cui-space-s);
 }
-.cui-btn--link:hover:not(:disabled) {
+.cui-btn--link:hover:not(:disabled, [aria-disabled="true"]) {
   background: var(--cui-color-surface-hover);
 }
-.cui-btn:disabled {
+.cui-btn:disabled,
+.cui-btn[aria-disabled="true"] {
   cursor: not-allowed;
   color: var(--cui-color-text-disabled);
   background: var(--cui-color-surface);
   border-color: var(--cui-color-border-disabled);
 }
-.cui-btn--link:disabled {
+.cui-btn--link:disabled,
+.cui-btn--link[aria-disabled="true"] {
   border-color: transparent;
   background: transparent;
 }
-.cui-btn--loading:disabled {
+.cui-btn--loading:disabled,
+.cui-btn--loading[aria-disabled="true"] {
   cursor: progress;
 }
 

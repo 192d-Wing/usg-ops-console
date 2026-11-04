@@ -17,6 +17,12 @@ pub struct ButtonProps {
     /// Shows a spinner, sets `aria-busy` and disables the button.
     #[prop_or_default]
     pub loading: bool,
+    /// When disabled or loading, stay focusable: render `aria-disabled="true"`
+    /// instead of `disabled` and ignore clicks. Use where the button may hold
+    /// focus while it becomes busy (e.g. inside a modal), so focus is not lost
+    /// to `<body>` (WCAG 2.4.3). Never set on submit buttons.
+    #[prop_or_default]
+    pub keep_focus: bool,
     /// Renders `type="submit"` instead of `type="button"`.
     #[prop_or_default]
     pub submit: bool,
@@ -43,15 +49,23 @@ pub fn Button(props: &ButtonProps) -> Html {
         props.loading.then_some("cui-btn--loading"),
     );
     let ty = if props.submit { "submit" } else { "button" };
+    let inactive = props.disabled || props.loading;
+    let soft = props.keep_focus && !props.submit;
+    let onclick = if soft && inactive {
+        Callback::from(|e: MouseEvent| e.prevent_default())
+    } else {
+        props.onclick.clone()
+    };
     html! {
         <button
             type={ty}
             {class}
-            disabled={props.disabled || props.loading}
+            disabled={inactive && !soft}
+            aria-disabled={(inactive && soft).then_some("true")}
             aria-busy={props.loading.then_some("true")}
             aria-label={props.aria_label.clone()}
             data-testid={props.testid.clone()}
-            onclick={props.onclick.clone()}
+            {onclick}
         >
             if props.loading {
                 <span class="cui-spinner cui-spinner--inline" aria-hidden="true"></span>

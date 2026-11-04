@@ -1,0 +1,10 @@
+# CM-7: the image build context never contains the dev realm, dev secrets,
+# E2E tooling or local build output.
+target/
+deploy/compose/
+e2e/
+.agent-runs/
+.github/
+crates/console-shell/dist/
+crates/console-shell/dist-gallery/
+**/.DS_Store

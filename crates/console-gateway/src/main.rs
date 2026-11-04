@@ -1,113 +1,116 @@
 use std::net::SocketAddr;
+use std::process::ExitCode;
+use std::sync::Arc;
 
-use axum::Router;
-use axum::http::{HeaderName, HeaderValue, header};
-use axum::routing::get;
-use base64::Engine;
-use base64::engine::general_purpose::STANDARD as B64;
-use sha2::{Digest, Sha256};
-use tower_http::services::{ServeDir, ServeFile};
-use tower_http::set_header::SetResponseHeaderLayer;
-use tower_http::trace::TraceLayer;
+use console_gateway::config::{self, Config};
+use console_gateway::oidc::OidcClient;
+use console_gateway::rate_limit::RateLimiter;
+use console_gateway::routes::AppState;
+use console_gateway::session::{Clock, SessionStore, SystemClock};
+use console_gateway::{app, audit::AuditSink, connect_pool, migrate, sweeper};
 use tracing_subscriber::EnvFilter;
 
+/// `/login` attempts per client IP per minute.
+const LOGIN_PER_MINUTE: u32 = 30;
+
 #[tokio::main]
-async fn main() -> std::io::Result<()> {
+async fn main() -> ExitCode {
     tracing_subscriber::fmt()
         .json()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
         .init();
+    let res = match std::env::args().nth(1).as_deref() {
+        None | Some("serve") => run().await,
+        // One-shot job / init container: the only process that holds the
+        // migrator credential (SEC-006).
+        Some("migrate") => match config::migrator_url_from_env() {
+            Ok(url) => migrate(&url).await.map(|()| {
+                tracing::info!("database migrations applied");
+            }),
+            Err(e) => Err(e.to_string()),
+        },
+        Some(_) => Err("usage: console-gateway [serve|migrate]".into()),
+    };
+    match res {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(msg) => {
+            tracing::error!(error = %msg, "console-gateway failed to start");
+            ExitCode::FAILURE
+        }
+    }
+}
 
-    let addr: SocketAddr = std::env::var("CONSOLE_LISTEN")
-        .unwrap_or_else(|_| "0.0.0.0:8080".into())
-        .parse()
-        .map_err(std::io::Error::other)?;
-    let dist = std::env::var("CONSOLE_DIST").unwrap_or_else(|_| "crates/console-shell/dist".into());
-    let index = std::fs::read_to_string(format!("{dist}/index.html"))?;
+async fn run() -> Result<(), String> {
+    let cfg = Config::from_env().map_err(|e| e.to_string())?;
+    for w in &cfg.warnings {
+        tracing::warn!(warning = %w, "configuration");
+    }
+    let index = std::fs::read_to_string(format!("{}/index.html", cfg.dist))
+        .map_err(|e| format!("CONSOLE_DIST/index.html: {e}"))?;
 
-    let listener = tokio::net::TcpListener::bind(addr).await?;
-    tracing::info!(%addr, %dist, "console-gateway listening");
-    axum::serve(listener, app(&dist, &index))
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-        })
+    if let Some(url) = &cfg.migrator_database_url {
+        migrate(url).await?;
+    }
+    let pool = connect_pool(&cfg.database_url, cfg.db_max_connections)
         .await
-}
+        .map_err(|e| format!("CONSOLE_DATABASE_URL: connect failed: {e}"))?;
+    let store = SessionStore::new(pool);
+    if !store.schema_ready().await {
+        return Err(
+            "database schema not migrated (or CONSOLE_DATABASE_URL lacks console_app rights); \
+             run `console-gateway migrate`"
+                .into(),
+        );
+    }
+    let audit_pool = connect_pool(&cfg.audit_database_url, cfg.audit_db_max_connections)
+        .await
+        .map_err(|e| format!("CONSOLE_AUDIT_DATABASE_URL: connect failed: {e}"))?;
 
-fn app(dist: &str, index_html: &str) -> Router {
-    let spa = ServeDir::new(dist).fallback(ServeFile::new(format!("{dist}/index.html")));
-    let csp = HeaderValue::from_str(&content_security_policy(index_html))
-        .expect("CSP contains only ASCII");
-    Router::new()
-        .route("/healthz", get(|| async { "ok" }))
-        .fallback_service(spa)
-        // NIST 800-53: SC-8, SI-10 — baseline browser hardening headers.
-        .layer(SetResponseHeaderLayer::overriding(
-            header::CONTENT_SECURITY_POLICY,
-            csp,
-        ))
-        .layer(header_layer(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
-        .layer(header_layer(header::REFERRER_POLICY, "no-referrer"))
-        .layer(header_layer(
-            header::STRICT_TRANSPORT_SECURITY,
-            "max-age=31536000; includeSubDomains",
-        ))
-        .layer(TraceLayer::new_for_http())
-}
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let oidc = OidcClient::discover(&cfg, clock.clone())
+        .await
+        .map_err(|e| e.to_string())?;
 
-/// CSP that allows only same-origin scripts plus the exact inline bootstrap
-/// scripts Trunk wrote into `index.html` (by SHA-256), never `'unsafe-inline'`.
-fn content_security_policy(index_html: &str) -> String {
-    let hashes: String = inline_scripts(index_html)
-        .map(|body| format!(" 'sha256-{}'", B64.encode(Sha256::digest(body.as_bytes()))))
-        .collect();
-    format!(
-        "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'{hashes}; style-src 'self'; \
-         frame-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+    let listen = cfg.listen;
+    let state = Arc::new(AppState {
+        cfg: Arc::new(cfg),
+        store,
+        audit: AuditSink::new(audit_pool),
+        oidc: Arc::new(oidc),
+        clock,
+        login_limiter: RateLimiter::per_minute(LOGIN_PER_MINUTE),
+    });
+    let sweeper = sweeper::spawn(state.clone());
+
+    let listener = tokio::net::TcpListener::bind(listen)
+        .await
+        .map_err(|e| format!("CONSOLE_LISTEN: {e}"))?;
+    tracing::info!(addr = %listen, dist = %state.cfg.dist, "console-gateway listening");
+    let res = axum::serve(
+        listener,
+        app(state, &index).into_make_service_with_connect_info::<SocketAddr>(),
     )
+    .with_graceful_shutdown(shutdown())
+    .await
+    .map_err(|e| e.to_string());
+    sweeper.abort();
+    res
 }
 
-/// Bodies of `<script>` elements without a `src` attribute.
-fn inline_scripts(html: &str) -> impl Iterator<Item = &str> {
-    html.split("<script").skip(1).filter_map(|rest| {
-        let (tag, after) = rest.split_once('>')?;
-        let (body, _) = after.split_once("</script>")?;
-        (!tag.contains("src=")).then_some(body)
-    })
-}
-
-fn header_layer(name: HeaderName, value: &'static str) -> SetResponseHeaderLayer<HeaderValue> {
-    SetResponseHeaderLayer::overriding(name, HeaderValue::from_static(value))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use axum::body::Body;
-    use axum::http::{Request, StatusCode};
-    use tower::ServiceExt;
-
-    #[tokio::test]
-    async fn healthz_ok_with_security_headers() {
-        let res = app("/nonexistent", "")
-            .oneshot(Request::get("/healthz").body(Body::empty()).unwrap())
-            .await
-            .unwrap();
-        assert_eq!(res.status(), StatusCode::OK);
-        let csp = res.headers()[header::CONTENT_SECURITY_POLICY]
-            .to_str()
-            .unwrap();
-        assert!(csp.contains("frame-ancestors 'none'"));
-        assert!(!csp.contains("unsafe-inline"));
-        assert_eq!(res.headers()[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
-    }
-
-    #[test]
-    fn hashes_only_inline_scripts() {
-        let html = r#"<script src="/a.js"></script><script type="module">boot()</script>"#;
-        let csp = content_security_policy(html);
-        let expected = B64.encode(Sha256::digest(b"boot()"));
-        assert!(csp.contains(&format!("'sha256-{expected}'")));
-        assert_eq!(csp.matches("'sha256-").count(), 1);
-    }
+async fn shutdown() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let term = async {
+        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+            Ok(mut s) => {
+                s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let term = std::future::pending::<()>();
+    tokio::select! { () = ctrl_c => {}, () = term => {} }
 }

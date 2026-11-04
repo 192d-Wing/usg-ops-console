@@ -35,6 +35,60 @@ jobs:
       - run: cargo clippy -p console-ui --target wasm32-unknown-unknown --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
 
+  gateway-integration:
+    # M3: session store + audit log against a real Postgres (SC-23, AU-9/12).
+    name: gateway integration (postgres)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        # postgres:17-alpine (multi-arch index digest, resolved 2026-11-03)
+        image: postgres:17-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-only-postgres
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      PGHOST: 127.0.0.1
+      PGPASSWORD: ci-only-postgres
+      POSTGRES_USER: postgres
+      CONSOLE_TEST_DATABASE_URL: postgres://postgres:ci-only-postgres@127.0.0.1:5432/postgres?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+      # Same SEC-006 role set as deploy/compose: NOLOGIN console_owner, NOLOGIN
+      # console_app group, runtime console, console_audit, console_migrator.
+      - name: Provision console DB roles (SEC-006 contract)
+        run: sh deploy/compose/postgres/init/01-roles.sh
+      - name: Gateway tests incl. Postgres integration
+        shell: bash
+        run: |
+          set -o pipefail
+          cargo test -p console-gateway --locked -- --nocapture 2>&1 | tee gateway-integration.log
+          # A misconfigured service must not pass silently.
+          if grep -q "NOT RUN" gateway-integration.log; then
+            echo "::error::integration tests reported NOT RUN"; exit 1
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: gateway-integration-log
+          path: gateway-integration.log
+          retention-days: 30
+      # SEC-006/AU-9 evidence: migrate the provisioned DB as console_migrator
+      # (not superuser), then assert ownership/grants.
+      - name: Migrate as console_migrator and assert role contract
+        env:
+          CONSOLE_MIGRATOR_DATABASE_URL: postgres://console_migrator:dev-only-migrator-db@127.0.0.1:5432/console?sslmode=disable
+        run: |
+          cargo run -p console-gateway --locked -- migrate
+          psql -v ON_ERROR_STOP=1 -U postgres -d console -f deploy/compose/postgres/check-roles.sql
+
   web:
     name: trunk build + bundle budget
     runs-on: ubuntu-latest
@@ -58,7 +112,7 @@ jobs:
           echo "release dist is gallery-free"
       - name: Shell WASM gzip size <= 1.5 MB; warn > baseline x1.10 (PERF-001)
         env:
-          WASM_GZ_BASELINE: "141918"  # M2 release baseline; see quality-gates.md
+          WASM_GZ_BASELINE: "173207"  # M3 release baseline (perf re-verification 2026-11-03); see quality-gates.md
           WASM_GZ_MAX: "1572864"
         run: |
           size=$(gzip -c crates/console-shell/dist/*.wasm | wc -c | tr -d ' ')
@@ -85,7 +139,10 @@ jobs:
       - uses: jetli/wasm-pack-action@0d096b08b4e5a7de8c28de67e11e945404e9eefa # v0.4.0
         with:
           version: v0.15.1
-      - run: wasm-pack test --headless --firefox crates/console-ui 2>&1 | tee wasm-pack.log
+      # shell: bash => -eo pipefail, so a failing suite fails the step despite tee.
+      - run: |
+          wasm-pack test --headless --firefox crates/console-ui 2>&1 | tee wasm-pack.log
+          wasm-pack test --headless --firefox crates/console-shell 2>&1 | tee -a wasm-pack.log
         shell: bash
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
@@ -95,10 +152,18 @@ jobs:
           retention-days: 30
 
   e2e:
-    # Playwright + axe against console-gateway serving dist-gallery, plus dist smoke projects.
-    name: e2e (Playwright chromium/firefox/webkit + axe)
+    # Playwright + axe through compose Keycloak + Postgres + Caddy TLS; three
+    # host gateways started by Playwright webServer (see e2e/playwright.config.ts).
+    name: e2e (Playwright chromium/firefox/webkit + axe, compose auth stack)
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
+    env:
+      COMPOSE: docker compose
+      # Makefile prepends --env-file deploy/compose/ports.env (port single source).
+      COMPOSE_FILES: -f deploy/compose/compose.yaml -f deploy/compose/compose.hostnet.yaml
+      COMPOSE_ENV: --env-file deploy/compose/ports.env
+      # e2e/tests/db-helpers.ts reaches the compose postgres via the engine CLI.
+      E2E_CONTAINER_ENGINE: docker
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
@@ -108,7 +173,15 @@ jobs:
       - uses: jetli/trunk-action@69821d4eec12c308c4b811e459e37556cf920057 # v0.5.0
         with:
           version: v0.22.1
+      # Always rebuild both bundles: main/idle/acr/rl gateways serve dist-gallery, dist-smoke serves dist.
       - run: make web web-gallery gateway
+      - name: Compose stack up (postgres, keycloak, tls-proxy)
+        run: make up
+      # SEC-006: schema owned by console_owner; migrate as console_migrator before any gateway serves.
+      - name: Migrate as console_migrator
+        env:
+          CONSOLE_MIGRATOR_DATABASE_URL: postgres://console_migrator:dev-only-migrator-db@127.0.0.1:5432/console?sslmode=disable
+        run: ./target/release/console-gateway migrate
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
@@ -138,6 +211,11 @@ jobs:
         working-directory: e2e
       - run: npx playwright test
         working-directory: e2e
+      - name: SEC-006 role contract after gateway migrations
+        run: $COMPOSE $COMPOSE_ENV $COMPOSE_FILES exec -T postgres psql -U postgres -d console -v ON_ERROR_STOP=1 -f - < deploy/compose/postgres/check-roles.sql
+      - name: Compose logs
+        if: failure()
+        run: $COMPOSE $COMPOSE_ENV $COMPOSE_FILES logs --no-color > compose-logs.txt 2>&1 || true
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
         with:
@@ -145,7 +223,12 @@ jobs:
           path: |
             e2e/playwright-report
             e2e/test-results
+            compose-logs.txt
+          if-no-files-found: ignore
           retention-days: 30
+      - name: Compose stack down
+        if: always()
+        run: $COMPOSE $COMPOSE_ENV $COMPOSE_FILES down -v
 
   supply-chain:
     name: cargo-deny
@@ -161,3 +244,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - run: podman build -f deploy/Containerfile -t usg-ops-console:ci .
+      - name: Image has no dev realm or dev secrets (CM-7)
+        run: |
+          cid=$(podman create usg-ops-console:ci)
+          podman export "$cid" | tar -t > image-files.txt
+          podman rm "$cid"
+          if grep -E 'realm-dev\.json|gateway\.env|deploy/compose' image-files.txt; then
+            echo "::error::dev realm/secrets in image"; exit 1
+          fi
+          echo "image is free of dev realm/secrets"

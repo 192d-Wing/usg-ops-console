@@ -75,3 +75,15 @@ body {
   .scope-picker, .scope-picker__field { flex: 1 1 100%; }
   .scopebar__meta { margin-inline-start: 0; }
 }
+
+/* User menu placeholder while /api/session loads (first paint not blocked). */
+.user-menu-skeleton {
+  display: inline-block; inline-size: calc(var(--cui-size-control) * 3); block-size: var(--cui-size-control);
+  border-radius: var(--cui-radius-pill); background: var(--cui-color-border-subtle);
+}
+@media (prefers-reduced-motion: no-preference) {
+  .user-menu-skeleton { animation: user-menu-pulse 1.5s ease-in-out infinite; }
+}
+@keyframes user-menu-pulse { 50% { opacity: 0.5; } }
+/* Idle dialog countdown: tabular digits so the text does not jitter. */
+.idle-countdown { font-weight: var(--cui-font-weight-bold); font-variant-numeric: tabular-nums; }

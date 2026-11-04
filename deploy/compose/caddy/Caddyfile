@@ -1,0 +1,38 @@
+# DEV ONLY TLS front for host-run console-gateway instances.
+# `tls internal` = Caddy's self-signed local CA (Playwright: ignoreHTTPSErrors).
+# Caddy adds X-Forwarded-For/-Proto/-Host; gateways trust 127.0.0.1/32 only.
+# Ports come from deploy/compose/ports.env via compose environment.
+{
+	admin off
+	skip_install_trust
+	auto_https disable_redirects
+	local_certs
+	# DEV/E2E ONLY: keep a client-supplied X-Forwarded-For (from loopback /
+	# podman gvproxy peers) so E2E can give each worker/login its own source IP
+	# and the gateway's per-IP /login limiter (30/min) does not throttle the
+	# whole suite. The limiter itself is exercised on a dedicated gateway.
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
+(gw) {
+	tls internal
+	reverse_proxy {$UPSTREAM_HOST}:{args[0]}
+}
+
+https://localhost:{$CONSOLE_TLS_PORT_RUN} {
+	import gw {$CONSOLE_GW_PORT_RUN}
+}
+https://localhost:{$CONSOLE_TLS_PORT_MAIN} {
+	import gw {$CONSOLE_GW_PORT_MAIN}
+}
+https://localhost:{$CONSOLE_TLS_PORT_DIST} {
+	import gw {$CONSOLE_GW_PORT_DIST}
+}
+https://localhost:{$CONSOLE_TLS_PORT_IDLE} {
+	import gw {$CONSOLE_GW_PORT_IDLE}
+}
+https://localhost:{$CONSOLE_TLS_PORT_ACR} {
+	import gw {$CONSOLE_GW_PORT_ACR}
+}

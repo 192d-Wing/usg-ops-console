@@ -4,22 +4,27 @@ Pure Rust (Yew/WASM + axum) operations console: shared chrome, sign-in, and a
 tool container that independently deployed USG tools plug into. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for what is built today and
 [docs/PLAN.md](docs/PLAN.md) for the target design and milestones. Compliance
-evidence is in [docs/compliance/](docs/compliance/).
+evidence is in [docs/compliance/](docs/compliance/). Deployment and local
+stack setup: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 
 ## Layout
 
 | Crate | Role |
 | --- | --- |
-| `console-protocol` | Tool manifest + shell ⇄ tool SDK message types (compat contract) |
+| `console-protocol` | Tool manifest + shell ⇄ tool SDK message types, and the gateway session HTTP types (compat contract) |
 | `console-ui` | Yew component library + design tokens (`assets/tokens.css`, `assets/components.css`); see [its README](crates/console-ui/README.md) |
 | `console-sdk` | Tool-side bridge (origin-checked encode/decode; transport in M4) |
 | `console-shell` | The Yew app, built with Trunk |
-| `console-gateway` | axum server: static shell, security headers (OIDC/registry/proxy in M3–M4) |
+| `console-gateway` | axum server: Keycloak OIDC sign-in, Postgres sessions, logout, audit log, security headers, static shell (registry/proxy in M4) |
 
 ## Develop
 
 Requires stable Rust with `wasm32-unknown-unknown`, `trunk`, and `cargo-deny`.
 The E2E tests also need Node 24 or later; `make wasm-test` needs `wasm-pack`.
+The local stack (`make up`, `make run`, `make e2e`, `make test-integration`)
+needs podman with `podman-compose` (or Docker with `COMPOSE="docker compose"`);
+on macOS run `podman machine init` and `podman machine start` once. See
+[docs/DEPLOYMENT.md](docs/DEPLOYMENT.md#local-development-with-podman).
 
 ```bash
 make check
@@ -33,10 +38,15 @@ check-no-gallery and deny.
 | `make web` | Release shell bundle in `crates/console-shell/dist` (no gallery) |
 | `make web-gallery` | Shell with the component gallery in `crates/console-shell/dist-gallery` (development only) |
 | `make check-no-gallery` | Rebuilds `dist` and fails if it has no wasm or the wasm contains gallery code (CM-7) |
-| `make run` | Builds `web-gallery` and serves it at <http://127.0.0.1:8080> (gallery at `/gallery`) |
-| `make wasm-test` | console-ui browser tests with wasm-pack (headless Firefox by default; `WASM_BROWSER=chrome` to override). Not part of `make check`. CI job `wasm-test` exists but has not had a green run yet |
+| `make up` | Runs `ports-free`, then starts the DEV ONLY compose stack: postgres, keycloak (realm `icam`, <http://localhost:8180>) and the Caddy TLS proxy |
+| `make down` | Stops and removes the compose stack (volumes kept) |
+| `make down-clean` | Same, and deletes the volumes (`down -v`) |
+| `make ports-free` | Fails fast, naming the busy ports, if a TLS port from `deploy/compose/ports.env` is in use. Override ports from the environment |
+| `make run` | Builds `web-gallery`, runs `up`, then the gateway on the host with `deploy/compose/gateway.env.example`. Browse <https://localhost:9442> and sign in as `console_user` / `dev-only-console_user` |
+| `make test-integration` | Gateway tests including the Postgres `pg_flow` tests, against the compose Postgres (`CONSOLE_TEST_DATABASE_URL`). Without a DB those tests print `NOT RUN` |
+| `make wasm-test` | console-ui and console-shell browser tests with wasm-pack (headless Firefox by default; `WASM_BROWSER=chrome` to override). Not part of `make check` |
 | `make e2e-install` | `npm ci` in `e2e/` and installs Playwright browsers (chromium, firefox, webkit) |
-| `make e2e` | Builds `web`, `web-gallery` and `gateway`, then runs Playwright + axe. Starts gateways on 127.0.0.1:8081 (`dist-gallery`) and 127.0.0.1:8082 (release `dist`). Pass options with `E2E_ARGS`, for example `E2E_ARGS="--project=chromium"`. Not part of `make check` |
+| `make e2e` | Builds `web`, `web-gallery` and `gateway`, runs `up`, then Playwright + axe through the compose Keycloak and Caddy TLS. Playwright starts the host gateways (ports in `deploy/compose/ports.env`). Pass options with `E2E_ARGS`, for example `E2E_ARGS="--project=setup --project=chromium"`. Not part of `make check`. M3 auth specs have run locally on Chromium and WebKit only; Firefox and the CI job have not run them yet |
 | `make e2e-typecheck` | `npm ci` and `tsc --noEmit` in `e2e/` |
 
 ## Workflow

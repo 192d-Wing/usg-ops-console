@@ -125,15 +125,6 @@ pub const ENVIRONMENTS: &[(&str, &str)] = &[
     ("dev", "Development"),
 ];
 
-/// Static display identity until M3 (labelled "(demo)" in the UI).
-pub struct DemoUser {
-    pub display_name: &'static str,
-}
-
-pub const DEMO_USER: DemoUser = DemoUser {
-    display_name: "Demo User",
-};
-
 pub fn env_label(id: &str) -> &str {
     ENVIRONMENTS
         .iter()

@@ -1,0 +1,388 @@
+{
+  "realm": "icam",
+  "enabled": true,
+  "displayName": "icam (DEV ONLY - local compose)",
+  "attributes": {
+    "dev_only": "true",
+    "acr.loa.map": "{\"urn:usg-ops-console:dev:password\": 1}"
+  },
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": false,
+  "rememberMe": false,
+  "sslRequired": "external",
+  "bruteForceProtected": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "console-user",
+        "description": "Required to obtain a usg-ops-console session (CONSOLE_REQUIRED_ROLE)"
+      },
+      {
+        "name": "console-admin",
+        "description": "usg-ops-console admin (carried in roles; enforced from M6)"
+      }
+    ]
+  },
+  "clients": [
+    {
+      "clientId": "usg-ops-console",
+      "name": "usg-ops-console (DEV ONLY)",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "secret": "dev-only-console-secret",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "frontchannelLogout": false,
+      "consentRequired": false,
+      "redirectUris": [
+        "https://localhost:${CONSOLE_TLS_PORT_RUN}/callback",
+        "https://localhost:${CONSOLE_TLS_PORT_MAIN}/callback",
+        "https://localhost:${CONSOLE_TLS_PORT_DIST}/callback",
+        "https://localhost:${CONSOLE_TLS_PORT_IDLE}/callback",
+        "https://localhost:${CONSOLE_TLS_PORT_ACR}/callback"
+      ],
+      "webOrigins": [
+        "+"
+      ],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "https://localhost:${CONSOLE_TLS_PORT_RUN}/logged-out##https://localhost:${CONSOLE_TLS_PORT_MAIN}/logged-out##https://localhost:${CONSOLE_TLS_PORT_DIST}/logged-out##https://localhost:${CONSOLE_TLS_PORT_IDLE}/logged-out##https://localhost:${CONSOLE_TLS_PORT_ACR}/logged-out",
+        "client.session.idle.timeout": "900",
+        "client.session.max.lifespan": "43200",
+        "use.refresh.tokens": "true",
+        "client_credentials.use_refresh_token": "false",
+        "acr.loa.map": "{\"urn:usg-ops-console:dev:password\": 1}",
+        "default.acr.values": "urn:usg-ops-console:dev:password"
+      },
+      "protocolMappers": [
+        {
+          "name": "realm roles (id_token)",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-usermodel-realm-role-mapper",
+          "consentRequired": false,
+          "config": {
+            "multivalued": "true",
+            "userinfo.token.claim": "false",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "claim.name": "realm_access.roles",
+            "jsonType.label": "String"
+          }
+        },
+        {
+          "name": "audience usg-ops-console",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "consentRequired": false,
+          "config": {
+            "included.client.audience": "usg-ops-console",
+            "id.token.claim": "true",
+            "access.token.claim": "true",
+            "introspection.token.claim": "true"
+          }
+        }
+      ]
+    }
+  ],
+  "users": [
+    {
+      "username": "console_user",
+      "email": "console_user@console.dev.invalid",
+      "firstName": "Console",
+      "lastName": "User",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "attributes": {
+        "dev_only": [
+          "DEV ONLY test user; password dev-only-console_user; never import outside local compose"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-console_user",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "console-user"
+      ]
+    },
+    {
+      "username": "console_admin",
+      "email": "console_admin@console.dev.invalid",
+      "firstName": "Console",
+      "lastName": "Admin",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "attributes": {
+        "dev_only": [
+          "DEV ONLY test user; password dev-only-console_admin; never import outside local compose"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-console_admin",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "console-user",
+        "console-admin"
+      ]
+    },
+    {
+      "username": "no_role",
+      "email": "no_role@console.dev.invalid",
+      "firstName": "No",
+      "lastName": "Role",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "attributes": {
+        "dev_only": [
+          "DEV ONLY test user; password dev-only-no_role; never import outside local compose"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-no_role",
+          "temporary": false
+        }
+      ],
+      "realmRoles": []
+    },
+    {
+      "username": "revoke_chromium",
+      "email": "revoke_chromium@console.dev.invalid",
+      "firstName": "Revoke",
+      "lastName": "Chromium",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "attributes": {
+        "dev_only": [
+          "DEV ONLY revocation E2E user (disabled/re-enabled by tests, one per browser); password dev-only-revoke_chromium"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-revoke_chromium",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "console-user"
+      ]
+    },
+    {
+      "username": "revoke_webkit",
+      "email": "revoke_webkit@console.dev.invalid",
+      "firstName": "Revoke",
+      "lastName": "Webkit",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "attributes": {
+        "dev_only": [
+          "DEV ONLY revocation E2E user (disabled/re-enabled by tests, one per browser); password dev-only-revoke_webkit"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-revoke_webkit",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "console-user"
+      ]
+    },
+    {
+      "username": "revoke_firefox",
+      "email": "revoke_firefox@console.dev.invalid",
+      "firstName": "Revoke",
+      "lastName": "Firefox",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "attributes": {
+        "dev_only": [
+          "DEV ONLY revocation E2E user (disabled/re-enabled by tests, one per browser); password dev-only-revoke_firefox"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-revoke_firefox",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "console-user"
+      ]
+    },
+    {
+      "username": "derole_chromium",
+      "email": "derole_chromium@console.dev.invalid",
+      "firstName": "Derole",
+      "lastName": "Chromium",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "attributes": {
+        "dev_only": [
+          "DEV ONLY revocation E2E user (console-user removed/re-added by tests, one per browser); password dev-only-derole_chromium"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-derole_chromium",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "console-user"
+      ]
+    },
+    {
+      "username": "derole_webkit",
+      "email": "derole_webkit@console.dev.invalid",
+      "firstName": "Derole",
+      "lastName": "Webkit",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "attributes": {
+        "dev_only": [
+          "DEV ONLY revocation E2E user (console-user removed/re-added by tests, one per browser); password dev-only-derole_webkit"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-derole_webkit",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "console-user"
+      ]
+    },
+    {
+      "username": "derole_firefox",
+      "email": "derole_firefox@console.dev.invalid",
+      "firstName": "Derole",
+      "lastName": "Firefox",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "attributes": {
+        "dev_only": [
+          "DEV ONLY revocation E2E user (console-user removed/re-added by tests, one per browser); password dev-only-derole_firefox"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-derole_firefox",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "console-user"
+      ]
+    }
+  ],
+  "ssoSessionIdleTimeout": 900,
+  "ssoSessionMaxLifespan": 43200,
+  "revokeRefreshToken": false,
+  "browserFlow": "browser-loa-dev",
+  "authenticationFlows": [
+    {
+      "alias": "browser-loa-dev",
+      "description": "DEV ONLY: cookie SSO or password form at LoA 1 (acr urn:usg-ops-console:dev:password)",
+      "providerId": "basic-flow",
+      "topLevel": true,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "auth-cookie",
+          "authenticatorFlow": false,
+          "requirement": "ALTERNATIVE",
+          "priority": 10,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticatorFlow": true,
+          "requirement": "ALTERNATIVE",
+          "priority": 20,
+          "flowAlias": "browser-loa-dev forms",
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "browser-loa-dev forms",
+      "description": "forms",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticatorFlow": true,
+          "requirement": "CONDITIONAL",
+          "priority": 10,
+          "flowAlias": "browser-loa-dev level 1",
+          "userSetupAllowed": false
+        }
+      ]
+    },
+    {
+      "alias": "browser-loa-dev level 1",
+      "description": "LoA 1 = password (DEV stand-in for CAC/PIV)",
+      "providerId": "basic-flow",
+      "topLevel": false,
+      "builtIn": false,
+      "authenticationExecutions": [
+        {
+          "authenticator": "conditional-level-of-authentication",
+          "authenticatorConfig": "loa1-dev",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 10,
+          "userSetupAllowed": false
+        },
+        {
+          "authenticator": "auth-username-password-form",
+          "authenticatorFlow": false,
+          "requirement": "REQUIRED",
+          "priority": 20,
+          "userSetupAllowed": false
+        }
+      ]
+    }
+  ],
+  "authenticatorConfig": [
+    {
+      "alias": "loa1-dev",
+      "config": {
+        "loa-condition-level": "1",
+        "loa-max-age": "43200"
+      }
+    }
+  ]
+}

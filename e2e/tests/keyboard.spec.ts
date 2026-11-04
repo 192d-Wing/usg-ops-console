@@ -1,5 +1,6 @@
 import { expect, test, type Page } from "@playwright/test";
 import { DEMO, TID, gotoApp, query } from "./fixtures";
+import { NO_AUTH, loginVia } from "./auth-helpers";
 
 /** WebKit (macOS-style) only tabs to links with Alt held. */
 function tabKey(browserName: string): string {
@@ -120,11 +121,21 @@ test.describe("service menu (disclosure)", () => {
 });
 
 test.describe("user menu and search", () => {
-  test("Sign out shows M3 info flash", async ({ page }) => {
-    await gotoApp(page, "/");
-    await page.getByTestId(TID.userMenuButton).click();
-    await page.getByTestId(TID.userMenuPanel).getByRole("button", { name: "Sign out" }).click();
-    await expect(page.getByTestId(TID.flashbar)).toContainText("Sign-in arrives in M3");
+  test("Sign out works from the keyboard (own session, never the shared one)", async ({ browser, baseURL }) => {
+    // M3: Sign out is real. Use a fresh context so the shared storageState
+    // session used by parallel specs is not ended.
+    const ctx = await browser.newContext({ storageState: NO_AUTH, ignoreHTTPSErrors: true, baseURL: baseURL! });
+    const page = await ctx.newPage();
+    await loginVia(page, baseURL!, "/");
+    await expect(page.getByTestId(TID.topNav)).toBeVisible();
+    await page.getByTestId(TID.userMenuButton).focus();
+    await page.keyboard.press("Enter");
+    const signOut = page.getByTestId(TID.userMenuPanel).getByRole("button", { name: "Sign out" });
+    await expect(signOut).toBeVisible();
+    await signOut.focus();
+    await page.keyboard.press("Enter");
+    await page.waitForURL(`${baseURL}/logged-out`);
+    await ctx.close();
   });
 
   test("search submit shows fixed info flash and never echoes the query", async ({ page }) => {

@@ -6,9 +6,13 @@
 
 pub mod manifest;
 pub mod message;
+pub mod session;
 
 pub use manifest::{Manifest, ManifestError, NavItem};
 pub use message::{Level, Scope, ShellToTool, ToolToShell, User};
+pub use session::{
+    AuthErrorBody, AuthErrorKind, AuthErrorReason, LogoutResponse, SessionInfo, SessionUser,
+};
 
 /// SDK protocol version spoken by this build of the shell.
 pub const PROTOCOL_VERSION: u32 = 1;

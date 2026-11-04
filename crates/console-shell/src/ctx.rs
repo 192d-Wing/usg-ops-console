@@ -1,7 +1,9 @@
 //! Contexts the shell provides to routed pages (and, in M4, the SDK bridge).
 
+use crate::session::SessionInfo;
 use console_protocol::Scope;
 use console_ui::{AlertKind, NavLink};
+use std::rc::Rc;
 use yew::prelude::*;
 
 /// Page header, breadcrumbs and `document.title` for the current route.
@@ -44,6 +46,27 @@ pub struct ShellCtx {
 pub struct ScopeCtx {
     pub scope: Scope,
     pub set: Callback<Scope>,
+}
+
+/// Gateway session (plan section 4, "Shell behaviour"). `session` is `None`
+/// while `/api/session` is loading or after it failed (`failed`, already
+/// flashed).
+/// The CSRF token lives only here, in WASM memory.
+#[derive(Clone, PartialEq)]
+pub struct SessionCtx {
+    pub session: Option<Rc<SessionInfo>>,
+    /// `POST /api/session/keepalive` (the only way to extend the session).
+    pub keepalive: Callback<()>,
+    /// `POST /logout`, then follow the returned `redirect`.
+    pub sign_out: Callback<()>,
+    /// Reload `/api/session` after a failure.
+    pub retry: Callback<()>,
+    /// A keepalive or sign-out request is in flight.
+    pub busy: bool,
+    /// `POST /logout` is in flight (announced as "Signing out…").
+    pub signing_out: bool,
+    /// `/api/session` failed with a non-401 error.
+    pub failed: bool,
 }
 
 /// Hook for pages: set the page meta once on mount.

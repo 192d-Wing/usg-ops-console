@@ -1,0 +1,12 @@
+# cargo audit waivers. Keep in sync with deny.toml [advisories].ignore (same ids, same reasons).
+[advisories]
+ignore = [
+  # POAM: rsa 0.9 (via openidconnect) Marvin timing side-channel affects PRIVATE-key ops only.
+  # The gateway only verifies id_token signatures with the IdP's public keys; no private RSA key
+  # exists at runtime (test-only signing). Re-check trigger: any openidconnect/rsa release, or
+  # any code path that signs/decrypts with RSA.
+  "RUSTSEC-2023-0071",
+  # POAM: unmaintained (not vulnerable), transitive via yew 0.23; re-check on each yew release.
+  "RUSTSEC-2024-0370", # proc-macro-error via yew-macro (build-time only)
+  "RUSTSEC-2025-0141", # bincode 1.x via gloo-worker; console does not use yew workers
+]

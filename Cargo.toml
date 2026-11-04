@@ -20,11 +20,26 @@ thiserror = "2"
 yew = { version = "0.23", features = ["csr"] }
 yew-router = "0.20"
 web-sys = "0.3"
+js-sys = "0.3"
+wasm-bindgen-futures = "0.4"
+wasm-bindgen-test = "0.3"
 axum = "0.8"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
-tower-http = { version = "0.6", features = ["fs", "trace", "set-header"] }
+tower-http = { version = "0.6", features = ["fs", "trace", "set-header", "timeout"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# M3 gateway auth/session stack (gateway-only; never linked into WASM).
+openidconnect = { version = "4", default-features = false, features = ["reqwest", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "rustls-tls-native-roots"] }
+sqlx = { version = "0.8", default-features = false, features = ["postgres", "runtime-tokio", "tls-rustls-ring-webpki", "macros", "migrate", "chrono"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+cookie = "0.18"
+rand = "0.9"
+subtle = "2"
+ipnet = "2"
+url = "2"
+base64 = "0.23"
+sha2 = "0.11"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
