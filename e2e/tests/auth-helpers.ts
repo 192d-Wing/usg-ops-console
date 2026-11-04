@@ -23,7 +23,9 @@ export type TestUser = { username: string; password: string; name: RegExp };
 
 export const SID_COOKIE = "__Host-console_sid";
 export const AUTH_COOKIE = "__Host-console_auth";
-export const KEYCLOAK = "http://localhost:8180";
+// IP literal, not localhost: the gateway sends HSTS for localhost and Linux
+// WebKit would upgrade a plain-HTTP localhost Keycloak to TLS.
+export const KEYCLOAK = "http://127.0.0.1:8180";
 export const KC_REALM = `${KEYCLOAK}/realms/icam`;
 /** Matches a compact JWS/JWT anywhere in a string. */
 export const JWT_RE = /eyJ[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]{5,}\.[A-Za-z0-9_-]*/;

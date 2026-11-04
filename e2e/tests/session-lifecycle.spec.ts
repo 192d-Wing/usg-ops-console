@@ -15,7 +15,7 @@ test.describe("re-authentication (SEC-001)", () => {
     await loginVia(page, baseURL!, "/");
     await expect(page.getByTestId(TID.topNav)).toBeVisible();
     // Second fresh console context carrying only the Keycloak SSO cookies.
-    const kc = (await page.context().cookies()).filter((c) => c.domain === "localhost" && !c.name.startsWith("__Host-console"));
+    const kc = (await page.context().cookies()).filter((c) => c.domain === new URL(KC_REALM).hostname);
     const ctx = await browser.newContext({ ignoreHTTPSErrors: true, baseURL: baseURL! });
     await ctx.addCookies(kc);
     const p2 = await ctx.newPage();

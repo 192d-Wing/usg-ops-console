@@ -164,9 +164,13 @@ none of these files are in the image build context (`.containerignore`).
    `COMPOSE="docker compose"`). On macOS, create and start the VM once:
 
    ```bash
-   podman machine init
+   podman machine init --memory 4096
    podman machine start
    ```
+
+   The VM needs at least 4 GiB: with the 2 GiB default, Keycloak is
+   OOM-killed during the E2E suite. For an existing VM run
+   `podman machine stop && podman machine set --memory 4096 && podman machine start`.
 
 2. Start the stack and sign in:
 

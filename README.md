@@ -38,7 +38,7 @@ check-no-gallery and deny.
 | `make web` | Release shell bundle in `crates/console-shell/dist` (no gallery) |
 | `make web-gallery` | Shell with the component gallery in `crates/console-shell/dist-gallery` (development only) |
 | `make check-no-gallery` | Rebuilds `dist` and fails if it has no wasm or the wasm contains gallery code (CM-7) |
-| `make up` | Runs `ports-free`, then starts the DEV ONLY compose stack: postgres, keycloak (realm `icam`, <http://localhost:8180>) and the Caddy TLS proxy |
+| `make up` | Runs `ports-free`, then starts the DEV ONLY compose stack: postgres, keycloak (realm `icam`, <http://127.0.0.1:8180>) and the Caddy TLS proxy |
 | `make down` | Stops and removes the compose stack (volumes kept) |
 | `make down-clean` | Same, and deletes the volumes (`down -v`) |
 | `make ports-free` | Fails fast, naming the busy ports, if a TLS port from `deploy/compose/ports.env` is in use. Override ports from the environment |

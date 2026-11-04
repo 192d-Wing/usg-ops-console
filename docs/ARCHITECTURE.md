@@ -308,7 +308,7 @@ service exists under the compose profile `full`.
 | Service | Image (digest-pinned) | Host binding |
 | --- | --- | --- |
 | `postgres` | `postgres:17-alpine` | `127.0.0.1:5432` (`CONSOLE_PG_PORT`). Runs `postgres/init/01-roles.sh` (roles and the `console` DB) |
-| `keycloak` | `keycloak:26.8.1`, `start-dev --import-realm` | `http://localhost:8180`. Imports `keycloak/realm-dev.json`: realm `icam` (DEV ONLY) |
+| `keycloak` | `keycloak:26.8.1`, `start-dev --import-realm` | `http://127.0.0.1:8180` (an IP literal, so browsers never apply the gateway's HSTS to it). Imports `keycloak/realm-dev.json`: realm `icam` (DEV ONLY) |
 | `tls-proxy` | `caddy:2-alpine`, `tls internal` | `https://localhost:<CONSOLE_TLS_PORT_*>` to host gateways on `127.0.0.1:<CONSOLE_GW_PORT_*>` |
 
 Browsers reach gateways only through Caddy TLS because WebKit drops

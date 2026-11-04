@@ -155,7 +155,9 @@ jobs:
     # Playwright + axe through compose Keycloak + Postgres + Caddy TLS; three
     # host gateways started by Playwright webServer (see e2e/playwright.config.ts).
     name: e2e (Playwright chromium/firefox/webkit + axe, compose auth stack)
-    runs-on: ubuntu-latest
+    # Pinned: ubuntu-latest moved to 26.04 and a Playwright browser cache built
+    # on 24.04 (WebKit links ICU 74 / libxml2.so.2) broke every WebKit test.
+    runs-on: ubuntu-24.04
     timeout-minutes: 40
     env:
       COMPOSE: docker compose
@@ -202,7 +204,8 @@ jobs:
         uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ steps.pw.outputs.version }}
+          # ImageOS (e.g. ubuntu24) keeps browser builds from crossing OS images.
+          key: playwright-${{ runner.os }}-${{ env.ImageOS }}-${{ steps.pw.outputs.version }}
       - if: steps.pw-cache.outputs.cache-hit != 'true'
         run: npx playwright install --with-deps chromium firefox webkit
         working-directory: e2e

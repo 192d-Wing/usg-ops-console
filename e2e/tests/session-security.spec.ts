@@ -93,7 +93,11 @@ test.describe("open redirect via return_to", () => {
     expect(new URL(page.url()).pathname).toBe("/");
     for (const bad of BAD_RETURN_TO.slice(1)) {
       await page.goto(`/login?return_to=${encodeURIComponent(bad)}`);
-      await page.waitForURL((u) => u.origin === origin && !u.pathname.startsWith("/callback"));
+      // Wait for the whole /login -> IdP -> /callback bounce to settle; the
+      // starting /login URL itself must not satisfy the predicate (race).
+      await page.waitForURL(
+        (u) => u.origin === origin && !u.pathname.startsWith("/callback") && !u.pathname.startsWith("/login"),
+      );
       const u = new URL(page.url());
       expect(u.origin, bad).toBe(origin);
       expect(u.pathname, bad).toBe("/");
