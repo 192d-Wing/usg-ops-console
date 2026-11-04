@@ -21,6 +21,9 @@ async function signedIn(page: Page, baseURL: string, path = "/?site=hq") {
   await page.clock.install();
   await loginVia(page, baseURL, path);
   await expect(page.getByTestId(TID.topNav)).toBeVisible();
+  // The idle timers start only once the shell has its session; on slower
+  // (remote Linux) browsers fast-forwarding earlier skips them.
+  await expect(page.getByTestId("user-menu-loading")).toHaveCount(0);
   const s = await (await getSession(page.request)).json();
   expect(s.idle_timeout_secs).toBe(IDLE_SECS);
   return s as { idle_expires_at: string; absolute_expires_at: string };

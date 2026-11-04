@@ -5,7 +5,9 @@ tool container that independently deployed USG tools plug into. See
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for what is built today and
 [docs/PLAN.md](docs/PLAN.md) for the target design and milestones. Compliance
 evidence is in [docs/compliance/](docs/compliance/). Deployment and local
-stack setup: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+stack setup: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Building a tool that
+plugs into the console: [docs/INTEGRATING-A-TOOL.md](docs/INTEGRATING-A-TOOL.md)
+(reference tool: [examples/hello-tool](examples/hello-tool/README.md)).
 
 ## Layout
 
@@ -13,9 +15,9 @@ stack setup: [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
 | --- | --- |
 | `console-protocol` | Tool manifest + shell ⇄ tool SDK message types, and the gateway session HTTP types (compat contract) |
 | `console-ui` | Yew component library + design tokens (`assets/tokens.css`, `assets/components.css`); see [its README](crates/console-ui/README.md) |
-| `console-sdk` | Tool-side bridge (origin-checked encode/decode; transport in M4) |
+| `console-sdk` | Tool-side bridge: origin-checked codec; with feature `web`, the postMessage transport and Yew hooks |
 | `console-shell` | The Yew app, built with Trunk |
-| `console-gateway` | axum server: Keycloak OIDC sign-in, Postgres sessions, logout, audit log, security headers, static shell (registry/proxy in M4) |
+| `console-gateway` | axum server: Keycloak OIDC sign-in, Postgres sessions, logout, audit log, security headers, static shell, tool registry, per-tool origins, reverse proxy and signed identity assertion |
 
 ## Develop
 

@@ -1,7 +1,7 @@
 # NIST SP 800-53 Rev. 5 control mapping
 
-Status as of M3 (Keycloak OIDC sign-in, server-side sessions, logout, idle
-timeout, audit log), 2026-11-03.
+Status as of M4 (tool registry, authenticated reverse proxy, per-tool
+origins, identity assertion, tool container, SDK v1), 2026-11-04.
 This file describes only what the code in this repository does today.
 
 Status values:
@@ -26,6 +26,16 @@ Firefox and WebKit (268 passed, 0 failed, 4 flaky; POAM-030 closed,
 flakes tracked as POAM-032). M1/M2 rows cite CI run
 [41740455231](https://github.com/192d-Wing/usg-ops-console/actions/runs/41740455231).
 
+**M4 evidence scope.** M4 has **not run in CI** (pending push). M4 rows cite
+local runs only (QA "Final (round 3)"): `make check` 252 tests passed;
+`make test-integration` 99 passed (56 lib, 9 oidc, 21 `pg_flow`, 13
+`router`); Playwright on macOS (chromium, webkit, idle, ka503, dist,
+prodlike-chromium) 294 passed, 0 failed; Playwright in the pinned Linux
+container (chromium, firefox, webkit; prodlike excluded) 428 passed, 3
+failed (Linux WebKit Keycloak sign-in flake, POAM-044; rerun 43/43). An
+M4 "Implemented" status means implemented with local test evidence; CI
+confirmation is outstanding for every M4 row.
+
 ## Summary
 
 | Control | Status | Milestone |
@@ -33,34 +43,40 @@ flakes tracked as POAM-032). M1/M2 rows cite CI run
 | AC-2, AC-2(3) Account management: revocation on keepalive | Implemented (dependency: Keycloak icam; POAM-019, POAM-029) | M3 |
 | AC-2 Account lifecycle (create, disable, delete users) | Inherited (Keycloak icam) | M3 |
 | AC-3 Access enforcement (session on every non-public route) | Implemented | M3 |
+| AC-3, AC-6 Tool access (registry roles, `/api/tools` filtering, launch, proxy) | Implemented (M4, local evidence) | M4 |
+| AC-4 Information flow enforcement (per-tool origins, header allow-list, postMessage origin checks) | Implemented (M4, local evidence; residual POAM-035) | M4 |
 | AC-6 Least privilege (required role; DB roles) | Implemented | M3 |
 | AC-7 Unsuccessful logon attempts | Inherited (Keycloak icam brute-force detection; POAM-018) | M3 |
-| AC-11 Device lock / idle timeout | Implemented (dependency: icam client SSO idle; POAM-029) | M3 |
+| AC-11 Device lock / idle timeout | Implemented (dependency: icam client SSO idle; POAM-029). M4: per-row idle (POAM-031 closed), tool refresh gating with documented cross-origin limitation (POAM-039) | M3-M4 |
 | AC-12 Session termination | Implemented | M3 |
 | AU-2, AU-12 Event logging, audit record generation | Implemented | M3 |
 | AU-3 Content of audit records | Implemented | M3 |
-| AU-5 Response to audit logging failures | Partial (POAM-016) | M3 |
+| AU-5 Response to audit logging failures | Partial (POAM-016, POAM-036) | M3-M4 |
 | AU-8 Time stamps | Implemented | M3 |
 | AU-9 Protection of audit information | Partial (POAM-017) | M3 |
 | IA-2 Identification and authentication (OIDC) | Implemented | M3 |
 | IA-2(12) Acceptance of PIV credentials | Implemented (dependency: icam PIV `acr` mapping; POAM-028) | M3 |
-| IA-5 Authenticator management (client secret) | Implemented (dependency: rotation not evidenced) | M3 |
+| IA-5 Authenticator management (client secret; M4 assertion and sid keys) | Implemented (dependency: rotation not evidenced) | M3-M4 |
+| IA-9 Service identification and authentication (gateway-signed assertion to tools) | Implemented (M4, local evidence) | M4 |
 | IA-11 Re-authentication | Implemented | M3 |
 | SC-5 Denial-of-service protection | Partial (POAM-020) | M3 |
-| SC-8 Transmission confidentiality and integrity | Implemented (dependency: TLS-terminating ingress) | M0-M3 |
-| SC-13 Cryptographic protection | Implemented | M3 |
-| SC-18 Mobile code (Content Security Policy) | Implemented | M0-M3 |
-| SC-23 Session authenticity | Implemented | M3 |
+| SC-7 Boundary protection (tool origins, proxy, WebSocket 501) | Implemented (M4, local evidence; POAM-034, POAM-035) | M4 |
+| SC-8 Transmission confidentiality and integrity | Implemented (dependency: TLS-terminating ingress; POAM-037 for `insecure_http_upstream`) | M0-M4 |
+| SC-12 Cryptographic key establishment and management (assertion and sid keys) | Implemented (M4, local evidence; dependency: key custody and rotation process) | M4 |
+| SC-13 Cryptographic protection | Implemented (M4 adds ES256 assertion signing and HMAC-SHA256 `sid`, both on `ring`) | M3-M4 |
+| SC-18 Mobile code (CSP; M4 tool iframe sandbox and tool-origin CSP) | Implemented (accepted residual: `allow-modals`) | M0-M4 |
+| SC-23 Session authenticity (M4 adds `__Host-tool_sid` and launch codes) | Implemented | M3-M4 |
+| SC-39 Process isolation (tool content on separate browser origins) | Implemented (M4, local evidence) | M4 |
 | SC-28 Protection of information at rest (tokens) | Partial (POAM-015) | M3 |
 | SI-10 Input validation (`safe_href`, theme, scope query, search, `return_to`, OIDC tokens, config) | Implemented | M1-M3 |
 | SI-11 Error handling | Implemented | M2-M3 |
 | CM-7 Least functionality (gallery and dev realm excluded from release) | Implemented | M1-M3 |
-| SA-11 Developer testing (wasm-bindgen, integration, E2E) | Implemented (M3 CI jobs pending, POAM-030) | M2-M3 |
+| SA-11 Developer testing (wasm-bindgen, integration, E2E) | Implemented through M3 (CI). M4: Partial until CI runs (POAM-032, POAM-044) | M2-M4 |
 | SA-11(1) Static code analysis (clippy) | Implemented | M0 |
-| SR-3, SR-11, CM-14 Supply chain (pinned actions, images, npm) | Partial | M2-M3 |
-| RA-5 / SI-2 Dependency vulnerability scanning | Partial | M0 |
-| PL-8 Security architecture (scope is a UI filter only) | Partial (documented design rule) | M2 |
-| AC-3, AC-6 Service-menu role filtering | Planned (POAM-010) | M4 |
+| SR-3, SR-11, CM-14 Supply chain (pinned actions, images, npm; M4 crypto backend choice) | Partial (POAM-033) | M2-M4 |
+| RA-5 / SI-2 Dependency vulnerability scanning | Partial (POAM-033 added in M4) | M0-M4 |
+| PL-8 Security architecture (scope is a UI filter only; M4 `ctx` claim is a selection) | Partial (documented design rule) | M2-M4 |
+| CM-3, CM-6 Configuration change control (registry TOML, fail-closed validation) | Implemented (M4, local evidence; deviation POAM-037) | M4 |
 
 Session details: [SESSION_MANAGEMENT.md](SESSION_MANAGEMENT.md). Audit
 details: [AUDIT_LOGGING.md](AUDIT_LOGGING.md). Unless a path is given,
@@ -106,8 +122,27 @@ Tests: `router::every_non_public_route_requires_a_session`,
 `router::public_pages_need_no_session`,
 `router::identity_headers_are_stripped`; E2E `session-security.spec.ts`.
 
-Not covered: per-tool authorization (tools keep their own RBAC) and
-service-menu filtering (POAM-010, M4).
+M4 tools (POAM-010 and POAM-026 closed with local evidence):
+
+- Tool access is checked against the registry `required_roles` (any-of)
+  in three places: `GET /api/tools` returns only permitted tools
+  (`tools_api.rs`, marker `AC-3 ... closes POAM-010`); launch answers 404
+  for a not-permitted tool, identical to an unknown id (INT-009), and
+  audits `tool.denied` `missing_role`; every proxied request rechecks
+  roles and answers 403 if a role was revoked mid-session.
+- The shell service menu is built from `/api/tools` (`crates/console-shell/src/tools.rs`);
+  the static `SERVICES` list is gone.
+- Upstreams receive identity only from the signed assertion; client
+  identity headers are dropped by an allow-list rebuild (`proxy.rs:272`).
+- Tools keep their own RBAC on the assertion `roles` and must authorize
+  scope themselves.
+
+Tests: `router::tool_api_requires_a_session`, `router::console_origin_404s_tool_paths`,
+`router::forbidden_tool_launch_matches_unknown_id_without_awaiting_db`,
+`pg_tool_role_denied`, `pg_tool_launch_proxy_and_assertion`,
+`proxy::tests::allow_list_rebuild_drops_identity_and_hop_by_hop`, shell
+`tools::tests::accept_tool_rules`, `menu_groups_by_category`; E2E
+`tools.spec.ts`, `tools-norole.spec.ts`.
 
 ## AC-6 Least privilege
 
@@ -162,6 +197,25 @@ Dependency: the icam client SSO idle must not let Keycloak re-issue a code
 silently for a user whose reauth marker is gone (cookies cleared). Values
 to be confirmed with the icam admins (POAM-029).
 
+M4:
+
+- The idle limit is stored on each session row (migration
+  `0004_session_idle.sql`); replicas with different limits no longer end
+  each other's sessions (POAM-031 closed; test `pg_per_session_idle_limit`).
+- Tool requests recheck console idle and absolute deadlines and never
+  extend them (`pg_tool_session_lifecycle`).
+- A tool's `RequestSessionRefresh` is honoured only with trusted user
+  presence in the shell in the last 60 s or the idle dialog open
+  (`crates/console-shell/src/activity.rs`). Tests:
+  `activity::tests::refresh_needs_recent_input_or_open_dialog`,
+  `only_untainted_entry_into_frame_counts`; E2E `idle-tool.spec.ts`
+  (refresh spam with no input: 0 keepalives, deadline unchanged, session
+  expires on schedule), `tool-security.spec.ts`.
+- Documented limitation: input inside the cross-origin tool frame is
+  invisible to the shell, so a user working only in a tool gets the idle
+  warning (fails safe). Accepted residual: one faked frame entry per page
+  load (POAM-039). See [SESSION_MANAGEMENT.md](SESSION_MANAGEMENT.md#tool-sessions-m4).
+
 ## AC-12 Session termination
 
 **Status: Implemented.**
@@ -177,15 +231,19 @@ Tests: `pg_idle_and_absolute_expiry`, `pg_sweeper_deletes_and_audits`,
 `pg_full_flow_and_audit` (logout, cross-tab 401),
 `pg_form_logout_with_json_accept_and_limits`,
 `oidc_verify::end_session_url_carries_hint_and_client`; E2E `auth.spec.ts`
-(SSO ended, two tabs). Not covered by E2E: absolute expiry in the browser
-and the no-JS form logout (POAM-030).
+(SSO ended, two tabs). M4 adds E2E `session-gaps.spec.ts` (absolute-expiry
+reauth, no-JS form logout) and tool-session cascade on logout
+(`tools.spec.ts`, `pg_tool_session_lifecycle`): local evidence, CI
+pending.
 
 ## AU-2, AU-12 Event logging and audit record generation
 
-**Status: Implemented.** Nine event types (`login.success`,
+**Status: Implemented.** Nine M3 event types (`login.success`,
 `login.failure`, `login.denied`, `logout`, `session.expired.idle`,
 `session.expired.absolute`, `session.refresh`, `session.revoked`,
-`access.denied`), each written as a JSON log line (`target=audit`) and an
+`access.denied`) and six M4 types (`tool.launch`, `tool.access`,
+`tool.request`, `tool.denied`, `registry.loaded`,
+`registry.insecure_upstream`), each written as a JSON log line (`target=audit`) and an
 `audit_events` row (`src/audit.rs`). Catalogue and reasons:
 [AUDIT_LOGGING.md](AUDIT_LOGGING.md).
 
@@ -195,13 +253,19 @@ Tests: `pg_full_flow_and_audit`, `pg_callback_failures_and_single_use`,
 `pg_sweeper_deletes_and_audits`, `pg_login_rate_limit_is_audited_once`,
 `pg_failed_callback_ends_presented_session`; E2E audit-table queries in
 `session-lifecycle.spec.ts`, `revocation.spec.ts`, `assurance.spec.ts`.
+M4: `pg_tool_launch_proxy_and_assertion`, `pg_tool_role_denied`,
+`pg_tool_session_lifecycle`, `tool_origin::tests::navigation_audit_classification`,
+`tools_api::tests::audit_paths_drop_query`; E2E `tools.spec.ts` (audit rows
+for `tool.launch`/`tool.access`/`tool.request` and
+`identity_header_stripped`), `tool-isolation.spec.ts` (`launch_context`).
 
 ## AU-3 Content of audit records
 
 **Status: Implemented.** Who (`user_sub`, `username`, `session_ref`), what
 (`event_type`, `reason`), when (`occurred_at`), where (`client_ip` from the
 trusted-proxy `X-Forwarded-For` walk, `user_agent`), outcome, `request_id`.
-No token text.
+No token text. M4 adds nullable `tool_id`, `path` (no query),
+`http_status` and `latency_ms` (migration `0005_tool_sessions.sql`).
 
 Tests: `pg_full_flow_and_audit` (fields asserted; no `eyJ` in any row);
 `client_ip::tests::table`.
@@ -213,6 +277,13 @@ session (503). All other events are best effort: the JSON line is always
 written, and a DB failure is logged at `error` as `audit write failed`
 (`AuditSink::record_best_effort`, marker `// POAM: AU-5` in `src/audit.rs`
 and `src/sweeper.rs`). No alert or metric (POAM-016).
+
+M4: `registry.loaded` and `registry.insecure_upstream` fail closed (boot
+stops). Proxy-path rows go through a bounded background queue (1024
+rows, batches of 64); on overflow a row is dropped and counted
+(`AuditSink::dropped`), logged rate-limited (`DropLog`: first drop, then
+one summary per 10 s). Test `audit::tests::drop_log_first_then_rate_limited`.
+No metric export or alert (POAM-036, before production).
 
 ## AU-8 Time stamps
 
@@ -269,6 +340,38 @@ can be read from `*_FILE` paths; direct env values produce a startup
 warning naming the `_FILE` key. `Secret` redacts in `Debug`. Tests:
 `config::tests::defaults_and_secret_redaction`, `direct_secret_warns`,
 `direct_db_url_warns`. Secret rotation is not evidenced in this repo.
+
+M4: the assertion signing key (`CONSOLE_ASSERTION_KEY_FILE`) and the
+`sid` HMAC key (`CONSOLE_TOOL_SESSION_HMAC_KEY_FILE`, at least 32 bytes)
+are read from files; key material redacts in `Debug` (`SecretBytes`).
+The HMAC key file is required outside dev mode when tools exist; in dev
+mode a derived key is used with a warning. Tests:
+`config::tests::tool_keys_and_registry_files`,
+`registry::tests::sid_key_required_outside_dev_mode`,
+`assertion::tests::rejects_bad_keys`.
+
+## IA-9 Service identification and authentication
+
+**Status: Implemented (M4, local evidence).** The gateway authenticates
+itself and the user to tool upstreams with a per-request ES256 JWS in
+`X-Console-Assertion` (`src/assertion.rs`, `src/tool_origin.rs`): `typ`
+`console-assertion+jwt`, `kid` = RFC 7638 thumbprint, `iss` = console
+origin, `aud` = tool id, 60 s lifetime, unique `jti`, per-tool `sid`
+pseudonym. Public keys are published at `/.well-known/jwks.json`
+(`public, max-age=300`), including extra keys for rotation. Client-supplied
+assertion headers are always stripped. Tool verification rules are in
+[INTEGRATING-A-TOOL.md](../INTEGRATING-A-TOOL.md#verification-rules).
+
+Tests: `assertion::tests::signs_es256_with_kid_and_verifies_via_jwk`,
+`jwks_publishes_rotation_keys_and_kid_is_thumbprint`,
+`sid_is_stable_per_tool_and_unlinkable_across_tools`;
+`router::jwks_is_public_and_cacheable`; `pg_tool_launch_proxy_and_assertion`
+(assertion verified against the served JWKS with `jsonwebtoken`, claims
+checked); hello-tool-server tests; E2E `tools.spec.ts` (identity verified
+by the tool: `aud`, `iss`, roles limited to `hello:`).
+
+Dependency: tools must verify correctly; the console cannot prove that for
+third-party tools.
 
 ## IA-11 Re-authentication
 
@@ -341,8 +444,15 @@ is for local development only.
 
 ## SI-10 Information input validation
 
-**Status: Implemented** for the input points listed here. Manifests and
-SDK messages do not exist yet (M4).
+**Status: Implemented** for the input points listed here. M4 adds the
+registry (CM-3/CM-6 section), SDK v1 message decoding (16 KiB cap,
+non-object JSON rejected, unknown types ignored; tests
+`protocol_v1.rs`, shell `tool_wire::tests::edge_cases_match_serde`),
+launch path and proxied path validation (`tool_host::tests::launch_path_rules`,
+`proxy::tests::path_rules`), the scope header parser, and the shell's
+defensive `accept_tool` check of `/api/tools` entries
+(`tools::tests::accept_tool_rules`, `clean_text_caps_and_strips`,
+`safe_paths`).
 
 ### `safe_href`: rendered link targets
 
@@ -493,6 +603,14 @@ Within the gateway:
   migrator URLs. Test: `config::tests::remote_db_requires_verified_tls`.
 - All cookies are `Secure`. Test: `session::tests::cookie_flags`.
 - IdP HTTP client: rustls, no redirects followed.
+- M4 tool upstreams: https with full certificate verification
+  (webpki and native roots plus optional `upstream_ca_file`) unless the
+  upstream is loopback, dev mode is on, or the registry sets
+  `insecure_http_upstream = true` with a reason (CM-6 deviation, audited
+  at startup as `registry.insecure_upstream`; relies on an unverified
+  compensating control such as mesh mTLS, POAM-037). Tests:
+  `registry::tests::plain_http_upstream_needs_explicit_opt_in`,
+  `validation_table`.
 
 ## SC-13 Cryptographic protection
 
@@ -505,9 +623,55 @@ Tests: `session::tests::opaque_ids`,
 `authorize_url_has_pkce_s256_nonce_state`. Advisory waiver for `rsa`
 (verify-only use): POAM-014.
 
+M4: assertion signing is ECDSA P-256 SHA-256 and `sid` is HMAC-SHA256,
+both with `ring` (not `jsonwebtoken`, whose `rust_crypto` backend carries
+RUSTSEC-2026-0387, POAM-033). Launch codes and tool session ids are 32
+random bytes stored only as hashes; `jti` is 128-bit random. Tests:
+`assertion::tests::signs_es256_with_kid_and_verifies_via_jwk`,
+`sid_is_stable_per_tool_and_unlinkable_across_tools`,
+`pg_tool_session_lifecycle` (single-use codes).
+
+## SC-12 Cryptographic key establishment and management
+
+**Status: Implemented (M4, local evidence; dependency: key custody and
+rotation process).** Keys are provisioned as files
+(`CONSOLE_ASSERTION_KEY_FILE` PKCS#8 P-256; `CONSOLE_ASSERTION_PUBLISH_KEYS_FILE`
+SPKI bundle; `CONSOLE_TOOL_SESSION_HMAC_KEY_FILE`), loaded at startup only,
+with `kid` thumbprints and a JWKS that can publish the next and previous
+keys (rotation runbook in [DEPLOYMENT.md](../DEPLOYMENT.md#tool-keys)).
+Non-public PEM blocks are refused in the publish bundle. Tests:
+`assertion::tests::jwks_publishes_rotation_keys_and_kid_is_thumbprint`,
+`rejects_bad_keys`, `config::tests::tool_keys_and_registry_files`,
+`registry::tests::sid_key_required_outside_dev_mode`. Not evidenced: key
+generation, custody and an executed rotation in a real deployment.
+
 ## SC-18 Mobile code: Content Security Policy and browser hardening
 
-**Status: Implemented.**
+**Status: Implemented** (M4 additions with local evidence; accepted
+residual risk for `allow-modals`).
+
+M4: the console CSP `frame-src` is exactly the registry tool origins
+(`'none'` with no tools), not `'self'`. Every tool-origin response also
+gets a gateway CSP `frame-ancestors <console origin>; base-uri 'self';
+object-src 'none'` (intersects with the tool's own CSP), `nosniff`, HSTS,
+and `Referrer-Policy`/`Cross-Origin-Resource-Policy` if absent. The tool
+iframe sandbox is exactly `allow-scripts allow-same-origin allow-forms
+allow-downloads allow-popups allow-modals` (no top navigation, no
+`allow-popups-to-escape-sandbox`), `allow=""`,
+`referrerpolicy="no-referrer"`. Tests: `router::console_csp_frames_registry_origins_only`,
+`router::tool_origin_routing_and_headers`, shell
+`tool_host::tests::sandbox_flags_are_exact`; E2E `tools.spec.ts`
+(exact sandbox flags), `tool-security.spec.ts` (tool CSP, foreign framer
+gets no content, `frame-src` lists exactly the registry origins, top
+navigation blocked).
+
+**Residual risk (accepted by the user): `allow-modals`.** A tool can open
+`alert`/`confirm`/`prompt` dialogs over the console tab. These are
+browser-drawn and can be used for phishing-style prompts (for example a
+fake credential request) that appear to come from the console. Mitigated
+only by registry review of tools.
+
+Pre-M4 console CSP below (`frame-src` is now registry-derived):
 
 `src/headers.rs` `content_security_policy` builds:
 
@@ -550,7 +714,16 @@ POAM-011 (re-reviewed at M3, unchanged).
 
 ## SC-23 Session authenticity
 
-**Status: Implemented.** Opaque 256-bit session id in
+**Status: Implemented.** M4 tool sessions: `__Host-tool_sid` (host-only
+on the tool origin, `Secure`, `HttpOnly`, `SameSite=Strict`), minted only
+through a single-use, 30 s launch code bound to the console session and
+tool; rows cascade with the console session; at most 8 per (session,
+tool). Tests: `pg_tool_session_lifecycle`; E2E `tools.spec.ts` (code
+single use, cookie attributes, wrong origin refused, logout cascade),
+`tool-isolation.spec.ts`. Details:
+[SESSION_MANAGEMENT.md](SESSION_MANAGEMENT.md#tool-sessions-m4).
+
+Console session: opaque 256-bit session id in
 `__Host-console_sid` (`Secure`, `HttpOnly`, `SameSite=Lax`, `Path=/`, no
 `Domain`); only its sha256 is stored; a new id on every sign-in with the
 old row deleted in the same transaction; a client-chosen id is never
@@ -561,6 +734,84 @@ Tests: `session::tests::cookie_flags`, `opaque_ids`,
 `router::malformed_session_cookie_is_not_adopted`, `csrf::tests::token_compare`,
 `origin_rules`; E2E `auth.spec.ts` (cookie flags),
 `session-security.spec.ts` (fixation, rotation, CSRF matrix).
+
+## SC-7 Boundary protection
+
+**Status: Implemented (M4, local evidence; POAM-034, POAM-035).**
+
+- Each tool is served on its own origin, dispatched by `Host`; the
+  console origin returns 404 for `/t/*` and `/_console/*`; a tool origin
+  receiving another tool's path returns 421 (`tool_origin.rs`).
+- The proxy forwards only to the registry upstream for that tool (no
+  client-chosen destination), rejects dot segments and encoded separators
+  (400), caps bodies (413), limits concurrency per tool (503), applies
+  connect/header/body-idle timeouts (502/504), and refuses upstream
+  redirects to other origins (502).
+- WebSocket `Upgrade` and `CONNECT` get 501 (marker `// POAM: SC-7`,
+  `tool_origin.rs:681`, POAM-034).
+- Launch codes are accepted only with iframe Fetch Metadata from the same
+  site (or a console `Referer`); residual same-site breadth and
+  registered-tool framing: POAM-035 (dedicated registrable domain required,
+  [DEPLOYMENT.md](../DEPLOYMENT.md#tool-origins-dns-and-certificates)).
+
+Tests: `router::console_origin_404s_tool_paths`,
+`router::tool_origin_routing_and_headers`, `router::unknown_host_is_the_console`,
+`proxy::tests::path_rules`, `upgrade_detection`,
+`location_rewrite_only_for_upstream_authority`,
+`tool_origin::tests::launch_context_requires_console_iframe`,
+`pg_tool_proxy_limits` (501, 413, 504, 502, 503, streaming); E2E
+`tool-security.spec.ts`, `tool-isolation.spec.ts`, `tools.spec.ts`
+(WebSocket 501).
+
+## AC-4 Information flow enforcement
+
+**Status: Implemented (M4, local evidence; residual POAM-035).**
+
+- Request headers to upstreams are rebuilt from an allow-list; console
+  and tool session cookies never reach upstreams; upstream `Set-Cookie`
+  for console names, `__Host-tool_sid` or with a `Domain` attribute is
+  dropped (`proxy.rs`).
+- Shell and tool exchange only SDK v1 messages, with exact target origin
+  on send and `origin` + `source` checks on receipt, a 16 KiB cap and
+  lenient decoding (`tool_host.rs` `classify`, `console_sdk` transport).
+- The assertion `sid` is a per-tool pseudonym, not linkable across tools.
+- Each tool's session cookie is refused on another tool's origin.
+
+Tests: `proxy::tests::allow_list_rebuild_drops_identity_and_hop_by_hop`,
+`set_cookie_filter`, `response_headers_filtered`; shell
+`classify_checks_origin_then_source_then_data`,
+`decoder_never_sees_untrusted_data`, `source_identity_distinguishes_frames`;
+SDK wasm `rejects_foreign_origin`, `rejects_wrong_source`,
+`rejects_non_string_and_oversize`; protocol
+`unknown_types_are_ignored_known_but_malformed_errors`; E2E
+`tool-isolation.spec.ts` (cross-tool sid refused, foreign-origin
+postMessage ignored, NIST-007), `tool-security.spec.ts`, `prodlike.spec.ts`
+(cookie tossing from a sibling tool host cannot shadow `__Host-console_sid`;
+Chromium, local).
+
+## SC-39 Process isolation
+
+**Status: Implemented (M4, local evidence).** Tool content runs on a
+browser origin distinct from the console (registry validation refuses an
+origin equal to, or a subdomain of, the console host), so the browser's
+same-origin policy separates tool code from the shell DOM, storage and
+console cookies; in browsers with site isolation this also separates
+processes. Tests: `registry::tests::validation_table`; E2E
+`tool-security.spec.ts` (parent DOM, storage and `frameElement` access
+blocked; console API calls with the console cookie do not change the
+session), `tool-isolation.spec.ts`.
+
+## CM-3, CM-6 Configuration change control (tool registry)
+
+**Status: Implemented (M4, local evidence; deviation POAM-037).** The
+registry is a TOML file mounted into the gateway and changed through
+Git/Helm review. It is validated at startup and fails closed: unknown keys,
+`schema` other than 1, invalid ids, origins, upstreams, paths, roles,
+headers or limits stop boot with an error naming file, tool and field.
+`registry.loaded` is audited at every start (fail closed). Tests:
+`registry::tests::parses_good_registry_with_defaults`, `validation_table`,
+`unknown_fields_and_bad_toml_fail`, `too_many_tools`, `empty_registry_warns`;
+hello-tool-server `manifest_matches_registry_entries`.
 
 ## SC-28 Protection of information at rest
 
@@ -601,6 +852,14 @@ M3 additions, green in CI run [41773314457](https://github.com/192d-Wing/usg-ops
   tests 4 passed (headless Chrome). CI: e2e 268 passed / 0 failed / 4
   flaky across all three engines; wasm-test green (headless Firefox).
 
+M4 (**Partial until CI runs**): new specs `tools`, `tools-norole`,
+`tool-security`, `tool-isolation`, `tool-a11y`, `idle-tool`,
+`session-gaps`, `keepalive-503`, `prodlike` (prodlike-chromium only),
+opt-in `proxy-bench`; `wasm-test` adds `console-sdk --features web`;
+the hostile `evil` fixture now really posts its probes (NIST-002). Local
+evidence is listed at the top of this file. Open: no CI run yet; POAM-032
+closes only with a CI run ID; new Linux WebKit sign-in flake POAM-044.
+
 ## SA-11(1) Static code analysis
 
 **Status: Implemented.**
@@ -628,6 +887,14 @@ Why only Partial: these are configuration, not tests. The digest-pinned
 container build and the SHA-pinned workflow ran green in CI run [41740455231](https://github.com/192d-Wing/usg-ops-console/actions/runs/41740455231). There is no signature or provenance verification, and no automated update
 process (Dependabot/Renovate) for the pins.
 
+M4 (SR-3): the gateway deliberately signs with `ring` instead of
+`jsonwebtoken`'s `rust_crypto` backend to keep `crypto-bigint` 0.5
+(RUSTSEC-2026-0387) out of the signing path; `cargo tree` shows it only
+under `hello-tool-server` and gateway dev-dependencies. The waiver is in
+`deny.toml` and `.cargo/audit.toml` with a re-check trigger (POAM-033).
+No aws-lc in the graph. Evidence: `cargo deny check` and `cargo audit`
+green locally (release-notes, QA final round).
+
 ## PL-8 Security and privacy architecture: scope
 
 **Status: Partial (documented design rule, nothing to enforce yet).**
@@ -635,27 +902,35 @@ process (Dependabot/Renovate) for the pins.
 The global scope (site, tenant, environment) is a **UI filter, not an
 authorization claim**. It lives only in the URL query (never in
 `localStorage`; E2E "scope is never written to localStorage"). Upstreams must
-not trust scope values a tool echoes back, and M4 must re-authorize scope on
-the server. No server-side check exists yet.
+not trust scope values a tool echoes back.
+
+M4: the gateway passes the user's selection to tools as the assertion
+`ctx` claim, built from the client `X-Console-Scope` header filtered to the
+registry `scopes` keys and checked for syntax only. The gateway grants
+nothing from it; `ctx` is documented as a selection, not authorization
+(`console_protocol::tools::AssertionClaims::ctx`, SEC-003), and tools must
+authorize it ([INTEGRATING-A-TOOL.md](../INTEGRATING-A-TOOL.md#scope-ctx-is-a-selection-not-authorization)).
+The console itself still performs no server-side scope authorization,
+which is why this stays Partial.
 
 ## RA-5 / SI-2 Dependency vulnerability scanning
 
 **Status: Partial.**
 
 `make deny` and the CI `cargo-deny` job run `cargo deny check`. `make audit`
-runs `cargo audit`. Three advisories are waived in `deny.toml`
-(RUSTSEC-2024-0370, RUSTSEC-2025-0141, RUSTSEC-2023-0071). All are recorded
-in the POA&M (POAM-001, POAM-002, POAM-014).
+runs `cargo audit`. Four advisories are waived in `deny.toml` and
+`.cargo/audit.toml` (RUSTSEC-2024-0370, RUSTSEC-2025-0141,
+RUSTSEC-2023-0071, and in M4 RUSTSEC-2026-0387). All are recorded in the
+POA&M (POAM-001, POAM-002, POAM-014, POAM-033).
 
 These are gates, not tests of the system. Flaw remediation (SI-2) has no
 process documented in code yet.
 
 ## Planned controls
 
-- **AC-3, AC-6 service-menu filtering**: the service menu is static demo
-  data, not filtered by role (POAM-010, M4 registry).
-- **Per-tool proxy controls** (identity-header allow-list, SEC-010): M4
-  (POAM-026).
+- **WebSocket proxying** (SC-7): M5 (POAM-034).
+- **Console-signed launch nonce** (SC-23/AC-4): M5 (POAM-035).
+- **Audit drop metric and alert** (AU-5): before production (POAM-036).
 - **AU audit retention and SIEM export**: no code (see
   [AUDIT_LOGGING.md](AUDIT_LOGGING.md)).
 - **SC-28 token encryption at rest** and **AU-9 external audit store**: M7
@@ -667,4 +942,6 @@ WCAG 2.1 AA colour contrast: test `token_pairs_meet_wcag_aa` in
 `crates/console-ui/tests/contrast.rs` checks 40 declared token pairs in each
 theme against 4.5:1 (text) or 3:1 (UI). axe scans run in
 `e2e/tests/a11y.spec.ts` on Chromium only (0 serious/critical locally and
-in CI run [41740455231](https://github.com/192d-Wing/usg-ops-console/actions/runs/41740455231)). See POAM-004 and POAM-012.
+in CI run [41740455231](https://github.com/192d-Wing/usg-ops-console/actions/runs/41740455231)). See POAM-004 and POAM-012. M4 tool-container
+accessibility and the Firefox reverse-Tab conformance remark:
+[ACCESSIBILITY.md](ACCESSIBILITY.md).

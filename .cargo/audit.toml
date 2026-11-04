@@ -6,6 +6,10 @@ ignore = [
   # exists at runtime (test-only signing). Re-check trigger: any openidconnect/rsa release, or
   # any code path that signs/decrypts with RSA.
   "RUSTSEC-2023-0071",
+  # POAM (M4): crypto-bigint 0.5 via jsonwebtoken rust_crypto: ES256 verification with public keys
+  # only (hello-tool-server, gateway tests); gateway signing uses ring. Re-check trigger: a
+  # jsonwebtoken/p256 release on crypto-bigint >= 0.6.
+  "RUSTSEC-2026-0387",
   # POAM: unmaintained (not vulnerable), transitive via yew 0.23; re-check on each yew release.
   "RUSTSEC-2024-0370", # proc-macro-error via yew-macro (build-time only)
   "RUSTSEC-2025-0141", # bincode 1.x via gloo-worker; console does not use yew workers

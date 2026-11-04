@@ -890,6 +890,12 @@
   font-size: var(--cui-font-size-xs);
   font-weight: var(--cui-font-weight-bold);
 }
+.cui-dropdown__note {
+  display: block;
+  padding: var(--cui-space-xs) var(--cui-space-m);
+  color: var(--cui-color-text-muted);
+  font-size: var(--cui-font-size-s);
+}
 .cui-dropdown__divider {
   margin: var(--cui-space-xs) 0;
   border-top: var(--cui-border-width-s) solid var(--cui-color-border-subtle);

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+members = ["crates/*", "examples/hello-tool/*"]
 
 [workspace.package]
 version = "0.1.0"
@@ -21,6 +21,7 @@ yew = { version = "0.23", features = ["csr"] }
 yew-router = "0.20"
 web-sys = "0.3"
 js-sys = "0.3"
+wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
 wasm-bindgen-test = "0.3"
 axum = "0.8"
@@ -40,6 +41,18 @@ ipnet = "2"
 url = "2"
 base64 = "0.23"
 sha2 = "0.11"
+# M4 tool proxy + identity assertion (gateway / hello-tool server only; never linked into WASM).
+hyper = { version = "1", features = ["client", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http1", "http2", "tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["ring", "http1", "http2", "logging", "tls12"] }
+http-body = "1"
+http-body-util = "0.1"
+# ring / RustCrypto only (M3 decision: no aws-lc, no native-tls in the graph).
+jsonwebtoken = { version = "10", default-features = false, features = ["rust_crypto", "use_pem"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+webpki-roots = "1"
+rustls-native-certs = "0.8"
+ring = "0.17"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

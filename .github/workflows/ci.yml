@@ -33,6 +33,9 @@ jobs:
       - run: cargo clippy -p console-shell --target wasm32-unknown-unknown --locked -- -D warnings
       - run: cargo clippy -p console-shell --target wasm32-unknown-unknown --features gallery --locked -- -D warnings
       - run: cargo clippy -p console-ui --target wasm32-unknown-unknown --all-targets --locked -- -D warnings
+      # M4: SDK browser transport/hooks and the hello-tool web example (wasm only).
+      - run: cargo clippy -p console-sdk --features web --target wasm32-unknown-unknown --all-targets --locked -- -D warnings
+      - run: cargo clippy -p hello-tool-web --target wasm32-unknown-unknown --locked -- -D warnings
       - run: cargo test --workspace --locked
 
   gateway-integration:
@@ -112,7 +115,7 @@ jobs:
           echo "release dist is gallery-free"
       - name: Shell WASM gzip size <= 1.5 MB; warn > baseline x1.10 (PERF-001)
         env:
-          WASM_GZ_BASELINE: "173207"  # M3 release baseline (perf re-verification 2026-11-03); see quality-gates.md
+          WASM_GZ_BASELINE: "204977"  # M4 final (fix round 1, 2026-11-04; +18.3% over M3 accepted, PERF-001); see quality-gates.md
           WASM_GZ_MAX: "1572864"
         run: |
           size=$(gzip -c crates/console-shell/dist/*.wasm | wc -c | tr -d ' ')
@@ -124,6 +127,14 @@ jobs:
           if [ "$size" -gt "$warn" ]; then
             echo "::warning::shell wasm gz $size B is >10% over baseline $WASM_GZ_BASELINE B; justify in plan or update baseline"
           fi
+      # M4: example tool bundle (not part of the shell budget; plan §6 target < 250 KB gz).
+      - run: trunk build --release
+        working-directory: examples/hello-tool/web
+      - name: hello-tool WASM gzip size (report; warn > 250 KB)
+        run: |
+          size=$(gzip -c examples/hello-tool/web/dist/*.wasm | wc -c | tr -d ' ')
+          echo "hello-tool wasm gz bytes: $size"
+          if [ "$size" -gt 256000 ]; then echo "::warning::hello-tool wasm gz $size B > 250 KB target"; fi
 
   wasm-test:
     # POAM-003 / SA-11: console-ui wasm-bindgen tests in a headless browser.
@@ -143,6 +154,7 @@ jobs:
       - run: |
           wasm-pack test --headless --firefox crates/console-ui 2>&1 | tee wasm-pack.log
           wasm-pack test --headless --firefox crates/console-shell 2>&1 | tee -a wasm-pack.log
+          wasm-pack test --headless --firefox crates/console-sdk --features web 2>&1 | tee -a wasm-pack.log
         shell: bash
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: always()
@@ -154,11 +166,11 @@ jobs:
   e2e:
     # Playwright + axe through compose Keycloak + Postgres + Caddy TLS; three
     # host gateways started by Playwright webServer (see e2e/playwright.config.ts).
-    name: e2e (Playwright chromium/firefox/webkit + axe, compose auth stack)
+    name: e2e (Playwright chromium/firefox/webkit + prodlike + axe, compose auth stack, hello-tool)
     # Pinned: ubuntu-latest moved to 26.04 and a Playwright browser cache built
     # on 24.04 (WebKit links ICU 74 / libxml2.so.2) broke every WebKit test.
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 50
     env:
       COMPOSE: docker compose
       # Makefile prepends --env-file deploy/compose/ports.env (port single source).
@@ -176,7 +188,13 @@ jobs:
         with:
           version: v0.22.1
       # Always rebuild both bundles: main/idle/acr/rl gateways serve dist-gallery, dist-smoke serves dist.
-      - run: make web web-gallery gateway
+      # M4: hello-tool web dist + server (upstream of the main/prodlike gateways).
+      - run: make web web-gallery gateway hello
+      # prodlike project (plan §0): real sibling hostnames for the console and
+      # tool origins, so cookie tossing and same-site tool cookies are tested.
+      - name: /etc/hosts entries for prodlike (*.ops.test -> 127.0.0.1)
+        run: echo "127.0.0.1 console.ops.test hello.tools.ops.test evil.tools.ops.test" | sudo tee -a /etc/hosts
+      # Also generates the DEV ONLY assertion key (never committed) and renders registries.
       - name: Compose stack up (postgres, keycloak, tls-proxy)
         run: make up
       # SEC-006: schema owned by console_owner; migrate as console_migrator before any gateway serves.
@@ -212,7 +230,15 @@ jobs:
       - if: steps.pw-cache.outputs.cache-hit == 'true'
         run: npx playwright install-deps chromium firefox webkit
         working-directory: e2e
-      - run: npx playwright test
+      # Everything except the POAM-032 de-flake specs (normal CI retry policy).
+      - run: npx playwright test --grep-invert @no-retry
+        working-directory: e2e
+        env:
+          E2E_PRODLIKE: "1"
+      # POAM-032: the former flakes run with no retries, three times each, so a
+      # flake fails the job instead of hiding behind a retry.
+      - name: POAM-032 specs, --retries=0 x3
+        run: npx playwright test --grep @no-retry --retries=0 --repeat-each=3 --project=chromium --project=firefox --project=webkit
         working-directory: e2e
       - name: SEC-006 role contract after gateway migrations
         run: $COMPOSE $COMPOSE_ENV $COMPOSE_FILES exec -T postgres psql -U postgres -d console -v ON_ERROR_STOP=1 -f - < deploy/compose/postgres/check-roles.sql

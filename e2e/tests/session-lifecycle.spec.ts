@@ -36,6 +36,9 @@ test.describe("re-authentication (SEC-001)", () => {
     await loginVia(page, baseURL!, "/?site=hq");
     await expect(page.getByTestId(TID.topNav)).toBeVisible();
     const sid = (await sidCookie(page.context()))!.value;
+    // Unload the shell first: its own background requests would otherwise
+    // race ours and delete the expired row (reason then reads no_session).
+    await page.goto("about:blank");
     forceIdleExpiry(sid);
     // XHR first: 401 with the idle reason, and the reauth marker is set.
     const r = await getSession(page.request);

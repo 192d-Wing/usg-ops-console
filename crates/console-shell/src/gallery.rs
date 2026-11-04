@@ -90,6 +90,7 @@ pub fn Gallery() -> Html {
             NavLink::new("Developer", ""),
             NavLink::new("Component gallery", "/gallery"),
         ],
+        document_title: None,
     });
     let ctx = use_context::<ShellCtx>();
     let flash = ctx.as_ref().map(|c| c.flash.clone()).unwrap_or_default();

@@ -87,3 +87,31 @@ body {
 @keyframes user-menu-pulse { 50% { opacity: 0.5; } }
 /* Idle dialog countdown: tabular digits so the text does not jitter. */
 .idle-countdown { font-weight: var(--cui-font-weight-bold); font-variant-numeric: tabular-nums; }
+
+/* Tool container (M4). The frame fills the content column; the height is a
+   layout value (viewport minus chrome), not a design token. */
+.tool-host { display: flex; flex-direction: column; gap: var(--cui-space-s); min-width: 0; }
+.tool-host__badges {
+  display: flex; flex-wrap: wrap; gap: var(--cui-space-xs);
+  margin: 0; padding: 0; list-style: none;
+}
+.tool-host__loading { display: flex; justify-content: center; padding: var(--cui-space-l); }
+.tool-host__frame-wrap { min-width: 0; }
+.tool-frame {
+  display: block; inline-size: 100%; block-size: 75vh; min-block-size: 20rem;
+  border: var(--cui-border-width-s) solid var(--cui-color-border-subtle);
+  border-radius: var(--cui-radius-s);
+  background: var(--cui-color-bg);
+}
+.tool-frame:focus-visible, .tool-frame:focus, .tool-frame[data-frame-focused] {
+  outline: var(--cui-border-width-m) solid transparent; outline-offset: var(--cui-border-width-m);
+  box-shadow: var(--cui-focus-ring);
+}
+/* Programmatic focus targets after "Reload tool" (A11Y-004). */
+.tool-host [data-refocus]:focus {
+  outline: var(--cui-border-width-m) solid transparent; outline-offset: var(--cui-border-width-m);
+  box-shadow: var(--cui-focus-ring);
+}
+@media (max-width: 44.99rem) {
+  .tool-frame { block-size: 70vh; }
+}

@@ -75,7 +75,10 @@ pub fn encode_uri_component(s: &str) -> String {
         if b.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&b) {
             out.push(b as char);
         } else {
-            out.push_str(&format!("%{b:02X}"));
+            const HEX: &[u8; 16] = b"0123456789ABCDEF";
+            out.push('%');
+            out.push(char::from(HEX[usize::from(b >> 4)]));
+            out.push(char::from(HEX[usize::from(b & 0xF)]));
         }
     }
     out

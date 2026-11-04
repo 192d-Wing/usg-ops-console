@@ -1,0 +1,20 @@
+# Presentation manifest for hello-tool. The gateway registry is authoritative
+# (id, origin, upstream, roles, scopes); this file is a template and a CI lint
+# input (checked against deploy/compose/tools/*.toml by hello-tool-server tests).
+id = "hello"
+title = "Hello Tool"
+category = "Examples"
+icon = "puzzle"
+version = "0.1.0"
+sdk_protocol = 1
+entry = "/"
+required_roles = ["hello:user"]
+scopes = ["site", "tenant"]
+
+[[nav]]
+label = "Overview"
+path = "/"
+
+[[nav]]
+label = "Request headers"
+path = "/headers"

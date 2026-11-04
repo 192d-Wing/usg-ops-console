@@ -1,7 +1,13 @@
 # Session management
 
-Status as of M3 (Keycloak OIDC sign-in, server-side sessions, logout, idle
-timeout), 2026-11-03. This file describes what the code does today.
+Status as of M4 (tool sessions, per-session idle limit, tool refresh
+gating), 2026-11-04. This file describes what the code does today.
+
+**M4 evidence status.** M4 has not run in CI (pending push). M4 statements
+below cite local runs: `make test-integration` 99 passed (21 `pg_flow`),
+Playwright macOS 294 passed and Linux container 428 passed / 3 flaky
+(POAM-044). The M3 evidence paragraph below is historical; M3 was later
+confirmed in CI run 41773314457 (POAM-030 closed).
 
 **Evidence status.** The gateway unit tests, `oidc_verify` and `router`
 tests, and the 15 `pg_flow` integration tests (`make test-integration`
@@ -88,22 +94,36 @@ Table `sessions` (`crates/console-gateway/migrations/0001_sessions.sql`,
 
 | Setting | Key | Default | Allowed range |
 | --- | --- | --- | --- |
-| Idle timeout | `CONSOLE_SESSION_IDLE_SECS` | 900 (15 min) | 60-3600, and less than absolute |
+| Idle timeout | `CONSOLE_SESSION_IDLE_SECS` | 900 (15 min) | 60-3600, and less than absolute. Stored on each row at creation (M4) |
 | Absolute lifetime | `CONSOLE_SESSION_ABSOLUTE_SECS` | 43200 (12 h) | 900-86400 |
 
 - Both deadlines are checked on **every** request in `require_session`.
   Deadlines are exclusive, and absolute wins when both have passed
   (`session::expiry`).
-- **Only an explicit "Stay signed in" extends the idle deadline** (user
-  decision Q6, strict AC-11). Ordinary requests, including
-  `GET /api/session`, never move `last_seen_at`. Keepalive never moves the
-  absolute deadline.
+- **Only `POST /api/session/keepalive` extends the idle deadline** (user
+  decision Q6, strict AC-11). The shell calls it for "Stay signed in", and
+  (M4) for a tool's `RequestSessionRefresh` only when the shell saw trusted
+  user presence in the last 60 s or the idle dialog is open (see
+  [Tool refresh gating](#tool-refresh-gating)). Ordinary requests,
+  including `GET /api/session` and all proxied tool requests, never move
+  `last_seen_at`. Keepalive never moves the absolute deadline.
+- **Per-row idle limit (M4, POAM-031 closed).** Migration
+  `0004_session_idle.sql` adds `idle_timeout_secs` and `idle_expires_at`
+  to `sessions`. Creation stores this gateway's limit; keepalive sets
+  `idle_expires_at = last_seen + idle_timeout_secs` from the row value.
+  Legacy rows with `NULL` use the gateway's configured limit. Replicas
+  with different `CONSOLE_SESSION_IDLE_SECS` therefore no longer end each
+  other's sessions. Test: `pg_per_session_idle_limit` (two gateways,
+  150 s and 900 s, one DB).
 - An expired session found on access is deleted, audited
   (`session.expired.idle` or `session.expired.absolute`, reason
   `on_access`), the sid cookie is cleared, the reauth marker is set, and the
   client gets 401 (XHR) or a 302 to `/login?return_to=...&reason=expired`
   (navigation).
-- The sweeper (`crates/console-gateway/src/sweeper.rs`) deletes expired
+- The sweeper (`crates/console-gateway/src/sweeper.rs`) uses the row
+  deadline (`absolute_expires_at <= now OR COALESCE(idle_expires_at,
+  last_seen_at + configured idle) <= now`), also deletes expired launch
+  codes, and deletes expired
   rows every `CONSOLE_SWEEP_INTERVAL_SECS` (default 60, range 5-3600), at
   most 1000 per pass, and audits them with reason `swept`.
 
@@ -113,8 +133,8 @@ extend idle, keepalive does); E2E `idle.spec.ts` (a GET does not extend
 idle; overlay clicks do not extend), `session-lifecycle.spec.ts`
 (DB-forced idle expiry gives 401 `idle_timeout`).
 
-Not covered by E2E: absolute-expiry reauthentication in the browser (only
-idle is exercised end to end; absolute is covered by `pg_flow`).
+M4 adds E2E `session-gaps.spec.ts` for absolute-expiry reauthentication in
+the browser (local evidence).
 
 ### Idle warning dialog (shell)
 
@@ -135,7 +155,9 @@ idle is exercised end to end; absolute is covered by `pg_flow`).
   (only thresholds below the lead). At 0 the shell navigates to
   `/login?return_to=<path+query>&reason=expired` with `location.replace`.
 - Keepalive errors (for example 503) appear inline in the dialog
-  (`role=alert`); the session is not extended.
+  (`role=alert`); the session is not extended. E2E (M4, local):
+  `keepalive-503.spec.ts`, against a gateway whose IdP token endpoint is
+  unreachable.
 
 ## Keepalive and IdP revalidation (AC-2, AC-12)
 
@@ -151,7 +173,8 @@ idle is exercised end to end; absolute is covered by `pg_flow`).
    reason `idp_rejected`, `token_invalid`, `subject_mismatch`,
    `no_refresh_token` or `missing_role`, the reauth marker is set, and the
    response is 401 `{"error":"unauthenticated","reason":"revoked"}`.
-4. If the IdP is unreachable or times out (5 s connect, 10 s total): 503
+4. If the IdP is unreachable or times out (M4: dedicated refresh client,
+   2 s connect, `CONSOLE_OIDC_REFRESH_TIMEOUT_SECS` total, default 4): 503
    `{"error":"unavailable"}`. The session is neither extended nor ended
    (POAM-019).
 5. On success: roles, id_token and refresh token are rewritten from the
@@ -186,8 +209,8 @@ Tests: `pg_reauth_after_logout_requires_fresh_auth`,
 `pg_expired_reason_forces_prompt_and_notice`,
 `oidc_verify::authorize_url_reauth_and_acr`; E2E
 `session-lifecycle.spec.ts` (re-auth form shown despite a live SSO session).
-The `stale_auth` rejection path is not exercised by E2E (it needs an IdP
-that returns an old `auth_time`).
+M4 adds E2E coverage of the `stale_auth` rejection (`session-gaps.spec.ts`,
+local evidence).
 
 Residual: the marker is a browser cookie. A user who clears cookies after a
 session ends gets normal SSO reuse on the next sign-in. The other bound is
@@ -261,7 +284,9 @@ Tests: `oidc_verify::end_session_url_carries_hint_and_client`,
 `logout_redirect_only_to_end_session_origin_or_logged_out`; E2E
 `auth.spec.ts` (id_token_hint, SSO really ended, two tabs),
 `session-lifecycle.spec.ts` (forged redirect ignored, `history.length`
-unchanged). The no-JS form path is covered by `pg_flow` only, not by E2E.
+unchanged). M4 adds an E2E for the no-JS form path (`session-gaps.spec.ts`, local
+evidence). Logout also deletes every tool session and launch code of that
+console session (cascade, below).
 
 ### The one token that reaches the browser
 
@@ -297,3 +322,114 @@ and strips the parameter.
 Tests: `return_to::tests::accepts_plain_paths`,
 `rejects_open_redirects_and_loops`, `notices_are_fixed_values`; E2E
 `session-security.spec.ts` (17 hostile values land on `/`).
+
+## Tool sessions (M4)
+
+Each tool runs on its own origin (`https://<id>.tools.<domain>`), which
+cannot see `__Host-console_sid`. The gateway gives the tool origin its own
+session, bound to the console session.
+
+### Launch code handoff
+
+1. The shell calls `POST /api/tools/{id}/launch` on the console origin
+   (session, CSRF token and Origin required; 60 per minute per session).
+   Order: CSRF, rate limit, id lookup, role check, then body parse. A
+   not-permitted tool gets 404, identical to an unknown id.
+2. The gateway stores a launch code (32 random bytes; only its hash is
+   stored) in `tool_launch_codes`: single use, valid **30 s**, bound to
+   the console session and tool id, with the requested path. It returns
+   `<tool origin>/_console/launch?code=...`.
+3. The iframe loads that URL. The tool origin accepts it only with
+   `Sec-Fetch-Dest: iframe` and `Sec-Fetch-Site: same-site|same-origin`,
+   or (no Fetch Metadata) a `Referer` from the console origin; a foreign
+   `Referer` is always refused. Refusal is checked **before** the code is
+   taken: 401, no cookie, code not consumed, audit `tool.denied`
+   `launch_context`.
+4. The code is taken atomically (`DELETE ... RETURNING`); the console
+   session must still be live and the user must still hold the tool's
+   roles (else 404). A new tool session row is created and the browser
+   gets `__Host-tool_sid` and a 303 to `/t/<id><path>`.
+
+Codes are not logged (the request span records no query).
+
+### Cookie
+
+| Cookie | Origin | Flags | Lifetime |
+| --- | --- | --- | --- |
+| `__Host-tool_sid` | tool origin only (host-only) | `Secure`, `HttpOnly`, `SameSite=Strict`, `Path=/`, no `Domain` | Browser session; server-side expiry is authoritative |
+
+The gateway strips `__Host-tool_sid` and all `__Host-console_*` cookies
+before forwarding upstream and drops upstream `Set-Cookie` headers for
+those names or with a `Domain` attribute.
+
+### Lifetime and cascade
+
+- Table `tool_sessions` (migrations `0005_tool_sessions.sql`,
+  `0006_tool_sessions_multi.sql`) references `sessions` with `ON DELETE
+  CASCADE`, as does `tool_launch_codes`. Logout, idle or absolute expiry,
+  revocation and the sweeper therefore remove every tool session and code
+  of that console session.
+- Each proxied request does one indexed join of `tool_sessions` and
+  `sessions` and rechecks the **console** idle (row limit) and absolute
+  deadlines and the tool's roles. It never extends either deadline. No
+  session cache (M3 Q7 decision kept), so revocation applies across
+  replicas on the next request.
+- At most **8** tool sessions per (console session, tool)
+  (`MAX_TOOL_SESSIONS`). Each launch adds a row inside a transaction that
+  locks the console row; the oldest by launch time beyond 8 is deleted.
+  An evicted tab gets 401 and the shell relaunches. Eviction is by launch
+  time, not last use, to avoid a DB write per request.
+- A tool session cookie is refused on any other tool's origin.
+
+Tests: `pg_tool_session_lifecycle` (single use, expiry, wrong origin,
+launch context, eviction, logout cascade, idle expiry blocks tool requests,
+tool traffic does not move `last_seen_at`), `pg_tool_role_denied`,
+`tool_origin::tests::launch_context_requires_console_iframe`; E2E
+`tools.spec.ts` (code single use, cookie attributes, logout cascade),
+`tool-isolation.spec.ts` (top-level navigation to a fresh code gets 401
+with no cookie, 8 sessions and eviction of the 9th, cross-tool sid
+refused).
+
+Residual (POAM-035): `same-site` covers every host under the registrable
+domain; console and tool origins must sit under a dedicated registrable
+domain ([DEPLOYMENT.md](../DEPLOYMENT.md#tool-origins-dns-and-certificates)).
+A malicious registered tool could frame another tool's launch URL with a
+code minted for the attacker's own session; a console-signed nonce is
+planned for M5.
+
+### Tool refresh gating
+
+A tool may send `RequestSessionRefresh` (for example after a 401). The
+shell (`crates/console-shell/src/activity.rs`, `tool_host.rs`) calls the
+console keepalive only if:
+
+- the shell saw trusted user presence in the last 60 s
+  (`REFRESH_INPUT_WINDOW_MS`): an `isTrusted` `pointerdown` or `keydown` in
+  the shell, or focus moving into the tool iframe (the first entry per
+  page load, or one after a trusted shell input following the last
+  observed frame exit); or
+- the idle warning dialog is open;
+
+and no other refresh happened in the last 30 s and none is in flight.
+Otherwise it replies `SessionRefreshed{ok:false, idle_expires_at:<current>}`
+and extends nothing. Activity the tool reports about itself is never
+trusted.
+
+**Limitation (documented, fails safe):** input inside the cross-origin
+tool frame is invisible to the shell. A user who works only inside a tool
+for longer than the idle timeout gets the normal idle warning and must
+choose "Stay signed in".
+
+**Accepted residual (POAM-039, SEC-012):** before the first observed frame
+exit, a tool's programmatic self-focus cannot be told apart from the
+user's first click into the frame, so at most one faked entry per page
+load can earn one refresh.
+
+Tests: `activity::tests::refresh_needs_recent_input_or_open_dialog`,
+`only_untainted_entry_into_frame_counts`; E2E `idle-tool.spec.ts` (IDLE
+gateway, 150 s: no input plus refresh spam gives no `ok:true`, no
+keepalive, unchanged `idle_expires_at`, and expiry on schedule; tool
+self-focus after the user returned to the shell does not extend;
+honoured cases: shell click, click into the frame, open dialog), passing
+on chromium, firefox and webkit locally; `tool-security.spec.ts` (refresh
+spam: 0 keepalives).

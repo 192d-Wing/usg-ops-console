@@ -1,4 +1,5 @@
-//! Per-client token bucket for `/login` (bounded memory).
+//! Per-key token buckets (bounded memory): `/login` per client IP, tool
+//! launches per session (M4).
 //!
 //! IPv6 clients are keyed by their /64 (one end-site prefix), so rotating
 //! addresses inside a prefix does not mint fresh buckets. At the table cap
@@ -7,6 +8,7 @@
 //! Per-IP limiting at the ingress is still expected in production.
 
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::sync::Mutex;
 use std::time::Instant;
@@ -34,10 +36,10 @@ struct Bucket {
 
 // COMPLIANCE MAPPING:
 // - NIST 800-53: SC-5 (Denial of Service Protection) — partial: /login rate limit, bounded table
-pub struct RateLimiter {
+pub struct RateLimiter<K = IpAddr> {
     capacity: f64,
     per_sec: f64,
-    buckets: Mutex<HashMap<IpAddr, Bucket>>,
+    buckets: Mutex<HashMap<K, Bucket>>,
 }
 
 /// IPv4 as-is; IPv6 masked to its /64.
@@ -55,8 +57,19 @@ pub fn key_for(ip: Option<IpAddr>) -> IpAddr {
     }
 }
 
-impl RateLimiter {
-    /// `per_minute` requests per client, bursting to the same amount.
+impl RateLimiter<IpAddr> {
+    pub fn allow(&self, ip: Option<IpAddr>, now: Instant) -> bool {
+        self.check(ip, now) == Decision::Allow
+    }
+
+    /// `None` IPs (in-process tests) share one bucket.
+    pub fn check(&self, ip: Option<IpAddr>, now: Instant) -> Decision {
+        self.check_key(key_for(ip), now)
+    }
+}
+
+impl<K: Hash + Eq + Clone> RateLimiter<K> {
+    /// `per_minute` requests per key, bursting to the same amount.
     pub fn per_minute(per_minute: u32) -> Self {
         Self {
             capacity: f64::from(per_minute),
@@ -65,13 +78,7 @@ impl RateLimiter {
         }
     }
 
-    pub fn allow(&self, ip: Option<IpAddr>, now: Instant) -> bool {
-        self.check(ip, now) == Decision::Allow
-    }
-
-    /// `None` IPs (in-process tests) share one bucket.
-    pub fn check(&self, ip: Option<IpAddr>, now: Instant) -> Decision {
-        let key = key_for(ip);
+    pub fn check_key(&self, key: K, now: Instant) -> Decision {
         let mut map = match self.buckets.lock() {
             Ok(m) => m,
             Err(poisoned) => poisoned.into_inner(),
@@ -100,13 +107,13 @@ impl RateLimiter {
 }
 
 /// Removes the `EVICT` least recently touched entries.
-fn evict_oldest(map: &mut HashMap<IpAddr, Bucket>) {
-    let mut ages: Vec<(Instant, IpAddr)> = map.iter().map(|(k, b)| (b.at, *k)).collect();
+fn evict_oldest<K: Hash + Eq + Clone>(map: &mut HashMap<K, Bucket>) {
+    let mut ages: Vec<(Instant, K)> = map.iter().map(|(k, b)| (b.at, k.clone())).collect();
     let n = EVICT.min(ages.len());
     if n == 0 {
         return;
     }
-    ages.select_nth_unstable_by_key(n - 1, |(at, _)| *at);
+    ages.select_nth_unstable_by(n - 1, |a, b| a.0.cmp(&b.0));
     for (_, k) in &ages[..n] {
         map.remove(k);
     }
@@ -119,7 +126,7 @@ mod tests {
 
     #[test]
     fn bucket() {
-        let rl = RateLimiter::per_minute(30);
+        let rl = RateLimiter::<IpAddr>::per_minute(30);
         let t0 = Instant::now();
         let a = Some("192.0.2.1".parse().unwrap());
         let b = Some("192.0.2.2".parse().unwrap());
@@ -137,7 +144,7 @@ mod tests {
 
     #[test]
     fn ipv6_keyed_by_slash_64() {
-        let rl = RateLimiter::per_minute(2);
+        let rl = RateLimiter::<IpAddr>::per_minute(2);
         let t0 = Instant::now();
         let x = Some("2001:db8:1:2::1".parse().unwrap());
         let y = Some("2001:db8:1:2:ffff::9".parse().unwrap());
@@ -153,7 +160,7 @@ mod tests {
 
     #[test]
     fn saturation_evicts_oldest_not_everyone() {
-        let rl = RateLimiter::per_minute(1);
+        let rl = RateLimiter::<IpAddr>::per_minute(1);
         let t0 = Instant::now();
         let attacker = Some("198.51.100.1".parse().unwrap());
         assert!(rl.allow(attacker, t0 + Duration::from_secs(5)));

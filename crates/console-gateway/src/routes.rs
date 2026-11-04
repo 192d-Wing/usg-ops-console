@@ -24,8 +24,9 @@ use url::form_urlencoded;
 use crate::audit::{AuditEvent, AuditSink, EventType, Outcome};
 use crate::config::Config;
 use crate::headers::no_store;
-use crate::oidc::{OidcClient, RefreshFailure, filter_roles, has_role};
+use crate::oidc::{OidcClient, RefreshFailure, filter_roles_with, has_role};
 use crate::rate_limit::{Decision, RateLimiter};
+use crate::registry::ToolsState;
 use crate::session::{
     self, AUTH_COOKIE, AUTH_REQUEST_TTL, AuthRequest, Clock, Expiry, NewSession, REAUTH_COOKIE,
     Refreshed, SID_COOKIE, Session, SessionStore,
@@ -50,19 +51,21 @@ pub struct AppState {
     pub oidc: Arc<OidcClient>,
     pub clock: Arc<dyn Clock>,
     pub login_limiter: RateLimiter,
+    /// M4 registry, assertion keys and tool rate limits.
+    pub tools: Arc<ToolsState>,
 }
 
 pub type Shared = Arc<AppState>;
 
 /// Where/who-agent/request id for audit records.
-struct Meta {
-    ip: Option<IpAddr>,
-    user_agent: Option<String>,
-    request_id: String,
+pub(crate) struct Meta {
+    pub(crate) ip: Option<IpAddr>,
+    pub(crate) user_agent: Option<String>,
+    pub(crate) request_id: String,
 }
 
 impl AppState {
-    fn meta(&self, headers: &HeaderMap, ext: &Extensions) -> Meta {
+    pub(crate) fn meta(&self, headers: &HeaderMap, ext: &Extensions) -> Meta {
         let peer = ext.get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip());
         let request_id = session::random_bytes::<8>()
             .map(|b| b.iter().map(|x| format!("{x:02x}")).collect())
@@ -77,7 +80,7 @@ impl AppState {
         }
     }
 
-    fn event(&self, m: &Meta, t: EventType, o: Outcome) -> AuditEvent {
+    pub(crate) fn event(&self, m: &Meta, t: EventType, o: Outcome) -> AuditEvent {
         let mut ev = AuditEvent::new(self.clock.now(), t, o);
         ev.client_ip = m.ip;
         ev.user_agent.clone_from(&m.user_agent);
@@ -86,7 +89,7 @@ impl AppState {
     }
 
     /// An event about an existing session (who + correlation handle).
-    fn session_event(
+    pub(crate) fn session_event(
         &self,
         m: &Meta,
         sess: &Session,
@@ -102,8 +105,48 @@ impl AppState {
         ev
     }
 
-    fn reauth_ttl(&self) -> Duration {
+    pub(crate) fn reauth_ttl(&self) -> Duration {
         self.cfg.session_absolute
+    }
+
+    /// Session roles kept: `console-*` plus any role a registry tool uses.
+    fn filter_roles(&self, roles: &[String]) -> Vec<String> {
+        filter_roles_with(roles, |r| self.tools.keeps_role(r))
+    }
+
+    /// Ends `sess` if it is past its idle (row limit, POAM-031) or absolute
+    /// deadline: deletes the row (tool sessions cascade) and audits the
+    /// expiry if this request did the delete. `None` while live.
+    pub(crate) async fn end_if_expired(
+        &self,
+        sess: &Session,
+        headers: &HeaderMap,
+        ext: &Extensions,
+    ) -> Option<AuthErrorReason> {
+        let now = self.clock.now();
+        let state = session::expiry(
+            sess.last_seen_at,
+            sess.absolute_expires_at,
+            sess.idle(self.cfg.session_idle),
+            now,
+        );
+        let (reason, ev_type) = match state {
+            Expiry::Live => return None,
+            Expiry::Absolute => (AuthErrorReason::AbsoluteTimeout, EventType::ExpiredAbsolute),
+            Expiry::Idle => (AuthErrorReason::IdleTimeout, EventType::ExpiredIdle),
+        };
+        // Only the request that actually deletes the row audits it (the
+        // sweeper may race us).
+        match self.store.delete(&sess.id_hash).await {
+            Ok(Some(_)) => {
+                let m = self.meta(headers, ext);
+                let ev = self.session_event(&m, sess, ev_type, Outcome::Success, "on_access");
+                self.audit.record_best_effort(&ev).await;
+            }
+            Ok(None) => {}
+            Err(e) => tracing::error!(error = %e, "expired session delete failed"),
+        }
+        Some(reason)
     }
 }
 
@@ -214,7 +257,7 @@ fn unauthenticated(
     res
 }
 
-fn redirect(status: StatusCode, location: &str) -> Response {
+pub(crate) fn redirect(status: StatusCode, location: &str) -> Response {
     let mut res = (status, [no_store()]).into_response();
     if let Ok(v) = HeaderValue::from_str(location) {
         res.headers_mut().insert(header::LOCATION, v);
@@ -222,14 +265,14 @@ fn redirect(status: StatusCode, location: &str) -> Response {
     res
 }
 
-fn append_cookie(res: &mut Response, cookie: &str) {
+pub(crate) fn append_cookie(res: &mut Response, cookie: &str) {
     if let Ok(v) = HeaderValue::from_str(cookie) {
         res.headers_mut().append(header::SET_COOKIE, v);
     }
 }
 
 /// `503`: an HTML page for navigations, `{"error":"unavailable"}` otherwise.
-fn unavailable(method: &Method, headers: &HeaderMap) -> Response {
+pub(crate) fn unavailable(method: &Method, headers: &HeaderMap) -> Response {
     if is_navigation(method, headers) {
         pages::unavailable()
     } else {
@@ -283,29 +326,7 @@ pub async fn require_session(State(s): State<Shared>, mut req: Request, next: Ne
             return unavailable(&method, headers);
         }
     };
-    let now = s.clock.now();
-    let state = session::expiry(
-        sess.last_seen_at,
-        sess.absolute_expires_at,
-        s.cfg.session_idle,
-        now,
-    );
-    if state != Expiry::Live {
-        let (reason, ev_type) = match state {
-            Expiry::Absolute => (AuthErrorReason::AbsoluteTimeout, EventType::ExpiredAbsolute),
-            _ => (AuthErrorReason::IdleTimeout, EventType::ExpiredIdle),
-        };
-        // Only the request that actually deletes the row audits it (the
-        // sweeper may race us).
-        match s.store.delete(&hash).await {
-            Ok(Some(_)) => {
-                let m = s.meta(headers, req.extensions());
-                let ev = s.session_event(&m, &sess, ev_type, Outcome::Success, "on_access");
-                s.audit.record_best_effort(&ev).await;
-            }
-            Ok(None) => {}
-            Err(e) => tracing::error!(error = %e, "expired session delete failed"),
-        }
+    if let Some(reason) = s.end_if_expired(&sess, headers, req.extensions()).await {
         return unauthenticated(&method, req.headers(), &pq, reason, Some(s.reauth_ttl()));
     }
     req.extensions_mut().insert(Arc::new(sess));
@@ -317,6 +338,8 @@ fn session_ext(req: &Request) -> Option<Arc<Session>> {
 }
 
 fn session_info(s: &AppState, sess: &Session, last_seen: DateTime<Utc>) -> SessionInfo {
+    // POAM-031: the row's own idle limit (this gateway's for legacy rows).
+    let idle = sess.idle(s.cfg.session_idle);
     SessionInfo {
         user: SessionUser {
             id: sess.user_sub.clone(),
@@ -327,10 +350,10 @@ fn session_info(s: &AppState, sess: &Session, last_seen: DateTime<Utc>) -> Sessi
         idle_expires_at: rfc3339(session::idle_deadline(
             last_seen,
             sess.absolute_expires_at,
-            s.cfg.session_idle,
+            idle,
         )),
         absolute_expires_at: rfc3339(sess.absolute_expires_at),
-        idle_timeout_secs: s.cfg.session_idle.as_secs(),
+        idle_timeout_secs: idle.as_secs(),
         server_time: rfc3339(s.clock.now()),
         csrf_token: B64URL.encode(&sess.csrf_token),
     }
@@ -371,6 +394,20 @@ pub async fn api_not_found() -> Response {
     json_error(StatusCode::NOT_FOUND, AuthErrorKind::NotFound)
 }
 
+/// `/t/*` and `/_console/*` on the console origin: tool content is never
+/// served same-origin with the shell (plan.md section 0), session or not.
+// COMPLIANCE MAPPING:
+// - NIST 800-53: SC-39 (Process Isolation), AC-4 — tools only on their own origins
+pub async fn tool_paths_not_here() -> Response {
+    json_error(StatusCode::NOT_FOUND, AuthErrorKind::NotFound)
+}
+
+/// `400 {"error":"bad_request"}` ([`AuthErrorKind::BadRequest`], INT-004;
+/// clients older than M4 round 1 read it as `Unknown`).
+pub fn bad_request() -> Response {
+    json_error(StatusCode::BAD_REQUEST, AuthErrorKind::BadRequest)
+}
+
 /// `POST /api/session/keepalive`: the only thing that extends the idle
 /// window, and only after the IdP accepts a refresh grant (NIST-001).
 // COMPLIANCE MAPPING:
@@ -407,7 +444,7 @@ pub async fn keepalive(State(s): State<Shared>, req: Request) -> Response {
     if !has_role(&identity.roles, &s.cfg.required_role) {
         return revoke(&s, &m, &sess, "missing_role").await;
     }
-    let roles = filter_roles(&identity.roles);
+    let roles = s.filter_roles(&identity.roles);
     let now = s.clock.now();
     let refreshed = Refreshed {
         roles: &roles,
@@ -440,6 +477,10 @@ pub async fn keepalive(State(s): State<Shared>, req: Request) -> Response {
     }
     let mut updated = (*sess).clone();
     updated.roles = roles;
+    if updated.idle_timeout_secs.is_none() {
+        // A legacy row adopts this gateway's limit on keepalive (`touch*`).
+        updated.idle_timeout_secs = i32::try_from(s.cfg.session_idle.as_secs()).ok();
+    }
     ([no_store()], Json(session_info(&s, &updated, now))).into_response()
 }
 
@@ -795,7 +836,7 @@ pub async fn callback(
         return unavailable(&method, headers);
     };
     let now = s.clock.now();
-    let roles = filter_roles(&identity.roles);
+    let roles = s.filter_roles(&identity.roles);
     let new = NewSession {
         id_hash: &sid_hash,
         user_sub: &identity.sub,
@@ -807,6 +848,8 @@ pub async fn callback(
         refresh_token: identity.refresh_token.as_deref(),
         now,
         absolute_expires_at: session::add(now, s.cfg.session_absolute),
+        idle: s.cfg.session_idle,
+        acr: identity.acr.as_deref(),
         client_ip: m.ip,
         user_agent: m.user_agent.as_deref(),
     };

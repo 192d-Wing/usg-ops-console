@@ -21,6 +21,7 @@ use openidconnect::{
 use serde::{Deserialize, Serialize};
 use subtle::ConstantTimeEq;
 use tokio::sync::RwLock;
+use tracing::Instrument;
 use url::Url;
 
 use crate::config::Config;
@@ -171,6 +172,9 @@ struct Provider {
 
 pub struct OidcClient {
     http: reqwest::Client,
+    /// Keepalive refresh grants only: connect 2 s, total
+    /// `CONSOLE_OIDC_REFRESH_TIMEOUT_SECS` (PERF-008).
+    refresh_http: reqwest::Client,
     issuer: IssuerUrl,
     client_id: ClientId,
     client_secret: ClientSecret,
@@ -188,6 +192,19 @@ pub fn http_client() -> Result<reqwest::Client, OidcError> {
         .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|_| OidcError::Http)
+}
+
+/// Client for the keepalive refresh grant: a short budget so a slow IdP
+/// yields a retryable 503 quickly instead of holding the shell (PERF-008).
+// COMPLIANCE MAPPING:
+// - NIST 800-53: SC-5 (Denial of Service Protection) — bounded refresh-grant latency
+pub fn refresh_http_client(total: Duration) -> Result<reqwest::Client, OidcError> {
+    reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .connect_timeout(Duration::from_secs(2).min(total))
+        .timeout(total)
         .build()
         .map_err(|_| OidcError::Http)
 }
@@ -232,6 +249,7 @@ impl OidcClient {
         let provider = build_provider(meta, &client_id, &client_secret, &redirect)?;
         Ok(Self {
             http,
+            refresh_http: refresh_http_client(cfg.oidc_refresh_timeout)?,
             issuer,
             client_id,
             client_secret,
@@ -312,7 +330,40 @@ impl OidcClient {
     /// same subject. Roles are returned unfiltered for the role gate.
     // COMPLIANCE MAPPING:
     // - NIST 800-53: AC-2 (Account Management), AC-2(3) — disabled/de-roled users lose the session at the next keepalive
+    // COMPLIANCE MAPPING:
+    // - NIST 800-53: AU-12 (Audit Record Generation) — PERF-007 span `oidc.refresh_grant{duration_ms, outcome}`
     pub async fn refresh_session(
+        &self,
+        refresh_token: &str,
+        expected_sub: &str,
+    ) -> Result<Identity, RefreshFailure> {
+        let span = tracing::info_span!(
+            "oidc.refresh_grant",
+            duration_ms = tracing::field::Empty,
+            outcome = tracing::field::Empty
+        );
+        let t0 = Instant::now();
+        let res = self
+            .refresh_inner(refresh_token, expected_sub)
+            .instrument(span.clone())
+            .await;
+        span.record(
+            "duration_ms",
+            u64::try_from(t0.elapsed().as_millis()).unwrap_or(u64::MAX),
+        );
+        span.record(
+            "outcome",
+            match &res {
+                Ok(_) => "ok",
+                Err(RefreshFailure::Rejected(_)) => "rejected",
+                Err(RefreshFailure::Unavailable) => "unavailable",
+            },
+        );
+        span.in_scope(|| tracing::info!("refresh grant finished"));
+        res
+    }
+
+    async fn refresh_inner(
         &self,
         refresh_token: &str,
         expected_sub: &str,
@@ -323,7 +374,7 @@ impl OidcClient {
             .client
             .exchange_refresh_token(&rt)
             .map_err(|_| RefreshFailure::Unavailable)?;
-        let resp = match req.request_async(&self.http).await {
+        let resp = match req.request_async(&self.refresh_http).await {
             Ok(r) => r,
             Err(RequestTokenError::ServerResponse(e)) => {
                 tracing::warn!(error = %e.error(), "refresh grant rejected by IdP");
@@ -529,9 +580,17 @@ pub fn has_role(roles: &[String], required: &str) -> bool {
 // COMPLIANCE MAPPING:
 // - NIST 800-53: SI-10 (Information Input Validation) — only bounded `console-*` roles stored/echoed
 pub fn filter_roles(roles: &[String]) -> Vec<String> {
+    filter_roles_with(roles, |_| false)
+}
+
+/// [`filter_roles`] that also keeps roles `extra` accepts (M4: roles a
+/// registry tool requires or forwards, e.g. `hello:user`).
+// COMPLIANCE MAPPING:
+// - NIST 800-53: AC-6 (Least Privilege) — only roles some registry entry uses are stored
+pub fn filter_roles_with(roles: &[String], extra: impl Fn(&str) -> bool) -> Vec<String> {
     let mut out: Vec<String> = roles
         .iter()
-        .filter(|r| r.starts_with("console-") && r.len() <= MAX_ROLE_LEN)
+        .filter(|r| (r.starts_with("console-") || extra(r)) && r.len() <= MAX_ROLE_LEN)
         .take(MAX_ROLES)
         .cloned()
         .collect();

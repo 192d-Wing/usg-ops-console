@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { JWT_RE, KC_REALM, NO_AUTH, SID_COOKIE, USERS, freshClientIp, getSession, loginVia, sidCookie } from "./auth-helpers";
+import { JWT_RE, KC_REALM, NO_AUTH, SID_COOKIE, USERS, getSession, idpCookies, loginAt, loginVia, sidCookie } from "./auth-helpers";
 
 test.use({ storageState: NO_AUTH });
 
@@ -83,39 +83,37 @@ const BAD_RETURN_TO = [
   `/${"a".repeat(3000)}`,
 ];
 
-test.describe("open redirect via return_to", () => {
-  test("hostile return_to values all land on / (one SSO login, then silent)", async ({ page, baseURL }) => {
-    test.setTimeout(120_000);
+// POAM-032: each hostile value runs in its OWN browser context with its own
+// client IP (no shared shell page racing its own /login, no per-IP limiter
+// overlap), seeded only with the IdP SSO cookies of one real sign-in. The
+// verdict is the /callback response's Location, not URL polling.
+test.describe("open redirect via return_to @no-retry", () => {
+  test("hostile return_to values all land on / (one SSO login, then silent)", async ({ browser, page, baseURL }) => {
+    test.setTimeout(180_000);
     const origin = new URL(baseURL!).origin;
-    // First login establishes Keycloak SSO; the rest bounce through silently.
-    await loginVia(page, baseURL!, `/login?return_to=${encodeURIComponent(BAD_RETURN_TO[0]!)}`);
-    expect(new URL(page.url()).origin).toBe(origin);
-    expect(new URL(page.url()).pathname).toBe("/");
+    const first = await loginAt(page, baseURL!, BAD_RETURN_TO[0]!);
+    expect(first.origin).toBe(origin);
+    expect(first.pathname).toBe("/");
+    const sso = await idpCookies(page.context());
+    expect(sso.length, "Keycloak SSO cookies").toBeGreaterThan(0);
     for (const bad of BAD_RETURN_TO.slice(1)) {
-      // Unload the previous shell first: each /login rotates the session, so
-      // the old page's in-flight /api/session gets 401 and the shell starts
-      // its own /login navigation, aborting ours (CI 41766732456: ERR_ABORTED).
-      await page.goto("about:blank");
-      // 13 /login hits from one IP would trip the per-IP /login limiter (429
-      // on the retry in the same CI run); one TEST-NET IP per bounce.
-      await freshClientIp(page);
-      await page.goto(`/login?return_to=${encodeURIComponent(bad)}`);
-      // Wait for the whole /login -> IdP -> /callback bounce to settle; the
-      // starting /login URL itself must not satisfy the predicate (race).
-      await page.waitForURL(
-        (u) => u.origin === origin && !u.pathname.startsWith("/callback") && !u.pathname.startsWith("/login"),
-      );
-      const u = new URL(page.url());
-      expect(u.origin, bad).toBe(origin);
-      expect(u.pathname, bad).toBe("/");
+      const ctx = await browser.newContext({ baseURL: baseURL!, ignoreHTTPSErrors: true, storageState: NO_AUTH });
+      try {
+        await ctx.addCookies(sso);
+        const p = await ctx.newPage();
+        const loc = await loginAt(p, baseURL!, bad);
+        expect(loc.origin, bad).toBe(origin);
+        expect(loc.pathname, bad).toBe("/");
+      } finally {
+        await ctx.close();
+      }
     }
   });
 
   test("a valid same-origin return_to is honoured", async ({ page, baseURL }) => {
-    await loginVia(page, baseURL!, `/login?return_to=${encodeURIComponent("/gallery?site=hq")}`);
-    const u = new URL(page.url());
-    expect(u.pathname).toBe("/gallery");
-    expect(u.searchParams.get("site")).toBe("hq");
+    const loc = await loginAt(page, baseURL!, "/gallery?site=hq");
+    expect(loc.pathname).toBe("/gallery");
+    expect(loc.searchParams.get("site")).toBe("hq");
   });
 });
 
@@ -144,25 +142,29 @@ test.describe("session fixation and rotation (SC-23)", () => {
   });
 });
 
-test.describe("CSRF on state-changing endpoints", () => {
+// POAM-032: no live shell page (it would keepalive/re-login concurrently);
+// every hostile request is a direct API call checked by its own response.
+test.describe("CSRF on state-changing endpoints @no-retry", () => {
   test("keepalive and logout need token + same Origin", async ({ page, baseURL }) => {
-    await loginVia(page, baseURL!, "/");
-    const s = await (await getSession(page.request)).json();
+    await loginAt(page, baseURL!, "/");
+    await page.goto("about:blank");
+    const api = page.context().request;
+    const s = await (await getSession(api)).json();
     const tok = String(s.csrf_token);
     expect(tok).not.toMatch(JWT_RE);
     const post = (path: string, headers: Record<string, string>) =>
-      page.request.post(path, { headers: { Accept: "application/json", ...headers }, maxRedirects: 0 });
+      api.post(`${baseURL}${path}`, { headers: { Accept: "application/json", ...headers }, maxRedirects: 0 });
     expect((await post("/api/session/keepalive", { Origin: baseURL! })).status()).toBe(403);
     expect((await post("/api/session/keepalive", { Origin: baseURL!, "X-CSRF-Token": "wrong" })).status()).toBe(403);
     expect((await post("/api/session/keepalive", { Origin: "https://evil.example", "X-CSRF-Token": tok })).status()).toBe(403);
     expect((await post("/logout", { Origin: "https://evil.example", "X-CSRF-Token": tok })).status()).toBe(403);
     // Still signed in after all the rejected attempts.
-    expect((await getSession(page.request)).status()).toBe(200);
+    expect((await getSession(api)).status()).toBe(200);
     const ok = await post("/api/session/keepalive", { Origin: baseURL!, "X-CSRF-Token": tok });
     expect(ok.status()).toBe(200);
     // GET /logout must not sign out (no state change on GET).
-    expect((await page.request.get("/logout", { maxRedirects: 0 })).status()).not.toBe(200);
-    expect((await getSession(page.request)).status()).toBe(200);
+    expect((await api.get(`${baseURL}/logout`, { maxRedirects: 0 })).status()).not.toBe(200);
+    expect((await getSession(api)).status()).toBe(200);
   });
 });
 
@@ -170,5 +172,6 @@ test("console_admin carries console-admin role", async ({ page, baseURL }) => {
   await loginVia(page, baseURL!, "/", USERS.admin);
   const s = await (await getSession(page.request)).json();
   expect(s.roles).toEqual(expect.arrayContaining(["console-user", "console-admin"]));
-  for (const r of s.roles as string[]) expect(r.startsWith("console-")).toBe(true);
+  // M4: console-* plus roles named by the tool registry (hello:user) are kept; nothing else.
+  for (const r of s.roles as string[]) expect(r.startsWith("console-") || r === "hello:user", r).toBe(true);
 });

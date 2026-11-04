@@ -11,6 +11,10 @@ ignore = [
   # POAM: rsa 0.9 (via openidconnect) has no constant-time private-key ops. The gateway only VERIFIES
   # id_token signatures with the IdP's public keys; no private RSA key exists at runtime (test-only signing).
   # Re-check when openidconnect moves to a patched rsa.
+  # POAM (M4): crypto-bigint 0.5.5 (not constant-time) via jsonwebtoken rust_crypto -> p256/p384 0.13. Only
+  # hello-tool-server and gateway tests use it, to VERIFY ES256 with public keys; gateway signing and the sid
+  # HMAC use ring (WU2). Re-check trigger: a jsonwebtoken/p256 release on crypto-bigint >= 0.6.
+  { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5 via jsonwebtoken rust_crypto: public-key ES256 verification only; signing uses ring" },
   { id = "RUSTSEC-2023-0071", reason = "Marvin: private-key timing only; gateway uses rsa for public-key signature verification" },
 ]
 

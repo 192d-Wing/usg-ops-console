@@ -1,0 +1,22 @@
+# syntax=docker/dockerfile:1
+# Template image for a console tool (hello-tool). Build from the repo root:
+#   podman build -f examples/hello-tool/Containerfile -t hello-tool .
+# The dev stack and E2E run hello-tool on the host instead (plan §9).
+# rust:1.99-bookworm (same pinned digest as deploy/Containerfile)
+FROM docker.io/library/rust:1.99-bookworm@sha256:c9155318d07341301a78b45ecdd81af2e43b8b297d64e8fd4c5e80d7735607c3 AS build
+RUN rustup target add wasm32-unknown-unknown \
+ && cargo install --locked trunk@0.22.1
+WORKDIR /src
+COPY . .
+RUN cd examples/hello-tool/web && trunk build --release \
+ && cd /src && cargo build --release --locked -p hello-tool-server
+
+# distroless/cc-debian12:nonroot (same pinned digest as deploy/Containerfile)
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:9dac0a79194e45a7da0158a9c6da57b217585af0786db3845d1f0ec1a0dd182f
+COPY --from=build /src/target/release/hello-tool-server /usr/local/bin/hello-tool-server
+COPY --from=build /src/examples/hello-tool/web/dist /srv/hello-tool
+# CONSOLE_ISSUER and CONSOLE_JWKS_URL must be provided at runtime.
+ENV HELLO_WEB_DIST=/srv/hello-tool HELLO_LISTEN=0.0.0.0:8090
+EXPOSE 8090
+USER nonroot
+ENTRYPOINT ["/usr/local/bin/hello-tool-server"]

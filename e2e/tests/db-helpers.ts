@@ -92,3 +92,36 @@ export function auditSince(sinceIso: string, where = "true"): AuditRow[] {
 export function dbNow(): string {
   return sql(`SELECT to_char(now() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"')`)[0] ?? new Date().toISOString();
 }
+
+/** Move the session's absolute deadline into the past (AC-12 absolute-expiry E2E; min config is 900 s). */
+export function forceAbsoluteExpiry(cookieValue: string): void {
+  const n = sql(
+    `WITH u AS (UPDATE sessions SET absolute_expires_at = now() - interval '1 second' WHERE id_hash = ${sidHashLiteral(cookieValue)} RETURNING 1) SELECT count(*) FROM u`,
+  );
+  if (n[0] !== "1") throw new Error("session row not found to expire");
+}
+
+export interface ToolAuditRow {
+  event_type: string;
+  outcome: string;
+  reason: string;
+  tool_id: string;
+  path: string;
+  http_status: string;
+  session_ref: string;
+}
+
+/** M4 tool audit rows (tool.launch/access/denied/request) since `sinceIso`, oldest first. */
+export function toolAuditSince(sinceIso: string, where = "true"): ToolAuditRow[] {
+  return sql(
+    `SELECT event_type, outcome, coalesce(reason,''), coalesce(tool_id,''), coalesce(path,''), coalesce(http_status::text,''), coalesce(session_ref,'') FROM audit_events WHERE occurred_at >= '${sinceIso}'::timestamptz AND event_type LIKE 'tool.%' AND (${where}) ORDER BY id`,
+  ).map((l) => {
+    const [event_type = "", outcome = "", reason = "", tool_id = "", path = "", http_status = "", session_ref = ""] = l.split("|");
+    return { event_type, outcome, reason, tool_id, path, http_status, session_ref };
+  });
+}
+
+/** Number of tool_sessions rows bound to a console session (cascade checks). */
+export function toolSessionCount(cookieValue: string): number {
+  return Number(sql(`SELECT count(*) FROM tool_sessions WHERE session_hash = ${sidHashLiteral(cookieValue)}`)[0] ?? "0");
+}

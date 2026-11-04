@@ -35,7 +35,9 @@ pub struct SessionUser {
 
 /// Body of `401` (`error = unauthenticated`), CSRF `403` (`error = csrf`),
 /// and the gateway's other JSON errors (`not_found`, `unavailable`,
-/// `payload_too_large`, `rate_limited`), which carry no `reason`/`login_url`.
+/// `payload_too_large`, `rate_limited`, and from M4 `forbidden`,
+/// `bad_gateway`, `gateway_timeout`, `not_implemented`,
+/// `misdirected_request`, `bad_request`), which carry no `reason`/`login_url`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuthErrorBody {
     pub error: AuthErrorKind,
@@ -59,6 +61,22 @@ pub enum AuthErrorKind {
     PayloadTooLarge,
     /// Too many requests (`429`, see `Retry-After`).
     RateLimited,
+    /// Authenticated but lacking a required role (`403`, M4 tools).
+    Forbidden,
+    /// Tool upstream unreachable or failed (`502`).
+    BadGateway,
+    /// Tool upstream did not answer in time (`504`).
+    GatewayTimeout,
+    /// Feature not supported, e.g. WebSocket upgrade on `/t/*` (`501`).
+    NotImplemented,
+    /// `421`: this tool origin received a path for a different tool id
+    /// (`/t/<other-id>/...`). An unknown `Host` is served by the console app,
+    /// never answered with 421; the ingress must pass `Host` through.
+    MisdirectedRequest,
+    /// `400`: malformed request the gateway refuses to forward or act on
+    /// (invalid launch JSON or path, dot segments or encoded separators in a
+    /// proxied path). Added in M4 round 1; older clients read `Unknown`.
+    BadRequest,
     /// A value added by a newer gateway.
     #[serde(other)]
     Unknown,
@@ -183,6 +201,19 @@ mod tests {
         .unwrap();
         assert_eq!(body.error, AuthErrorKind::Unknown);
         assert_eq!(body.reason, Some(AuthErrorReason::Unknown));
+        // A pre-M4 enum (this list minus the M4 kinds) maps them to Unknown;
+        // here they parse to the new variants.
+        for (s, k) in [
+            ("forbidden", AuthErrorKind::Forbidden),
+            ("bad_gateway", AuthErrorKind::BadGateway),
+            ("gateway_timeout", AuthErrorKind::GatewayTimeout),
+            ("not_implemented", AuthErrorKind::NotImplemented),
+            ("misdirected_request", AuthErrorKind::MisdirectedRequest),
+            ("bad_request", AuthErrorKind::BadRequest),
+        ] {
+            let b: AuthErrorBody = serde_json::from_str(&format!(r#"{{"error":"{s}"}}"#)).unwrap();
+            assert_eq!(b.error, k);
+        }
         let minimal: AuthErrorBody = serde_json::from_str(r#"{"error":"csrf"}"#).unwrap();
         assert_eq!(minimal.reason, None);
     }

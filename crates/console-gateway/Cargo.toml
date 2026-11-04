@@ -1,6 +1,6 @@
 [package]
 name = "console-gateway"
-description = "Console backend: serves the shell behind Keycloak OIDC sessions; registry and tool proxy land in M4."
+description = "Console backend: serves the shell behind Keycloak OIDC sessions, plus the tool registry, per-tool origins and the authenticated tool proxy."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -12,10 +12,18 @@ base64.workspace = true
 chrono.workspace = true
 console-protocol.workspace = true
 cookie.workspace = true
+http-body.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-rustls.workspace = true
+hyper-util.workspace = true
 ipnet.workspace = true
 openidconnect.workspace = true
 rand.workspace = true
+ring.workspace = true
 reqwest.workspace = true
+rustls.workspace = true
+rustls-native-certs.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -23,13 +31,17 @@ sqlx.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["time", "sync"] }
+toml.workspace = true
+tower = { version = "0.5", features = ["util"] }
 tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 url.workspace = true
+webpki-roots.workspace = true
 
 [dev-dependencies]
-tower = { version = "0.5", features = ["util"] }
+# Independent ES256 verification in tests (what tools do); never linked into the binary.
+jsonwebtoken.workspace = true
 
 [lints]
 workspace = true

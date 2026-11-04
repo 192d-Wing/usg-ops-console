@@ -87,3 +87,44 @@ export async function expectAxeClean(page: Page, name: string, include?: string)
     .map((v) => ({ id: v.id, impact: v.impact, nodes: v.nodes.map((n) => n.target.join(" ")) }));
   expect(blocking, `${name}: ${JSON.stringify(blocking, null, 2)}`).toEqual([]);
 }
+
+/**
+ * POAM-032: deterministic sign-in. Starts at /login directly (no shell
+ * bootstrap racing its own /login navigation), checks the /login 302 to the
+ * IdP, submits the form, and waits for the /callback RESPONSE (status +
+ * Location) instead of polling the page URL. Returns the callback Location
+ * resolved against the console origin.
+ */
+export async function loginAt(page: Page, origin: string, returnTo = "/", user: TestUser = USERS.user): Promise<URL> {
+  const want = new URL(origin).origin;
+  await freshClientIp(page);
+  const callback = page.waitForResponse((r) => {
+    const u = new URL(r.url());
+    return u.origin === want && u.pathname === "/callback";
+  });
+  const loginRes = page.waitForResponse((r) => {
+    const u = new URL(r.url());
+    return u.origin === want && u.pathname === "/login";
+  });
+  // Do not await goto: with live IdP SSO the whole chain completes inside it.
+  const nav = page.goto(`${want}/login?return_to=${encodeURIComponent(returnTo)}`).catch(() => null);
+  const lr = await loginRes;
+  expect(lr.status(), "/login must redirect to the IdP").toBe(302);
+  const idp = await Promise.race([
+    callback.then(() => false),
+    page.locator("#password").waitFor().then(() => true),
+  ]);
+  if (idp) await submitKeycloak(page, user);
+  const cb = await callback;
+  await nav;
+  expect([302, 303], `callback status (${cb.status()})`).toContain(cb.status());
+  const loc = new URL(cb.headers()["location"] ?? "", want);
+  await page.waitForURL((u) => u.origin === want && u.pathname === loc.pathname, { waitUntil: "commit" });
+  return loc;
+}
+
+/** Keycloak SSO cookies of a context (to start another context already signed in at the IdP). */
+export async function idpCookies(context: BrowserContext) {
+  const kc = new URL(KEYCLOAK);
+  return (await context.cookies()).filter((c) => c.domain.replace(/^\./, "") === kc.hostname);
+}

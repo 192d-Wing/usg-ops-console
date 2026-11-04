@@ -22,6 +22,10 @@
       {
         "name": "console-admin",
         "description": "usg-ops-console admin (carried in roles; enforced from M6)"
+      },
+      {
+        "name": "hello:user",
+        "description": "M4 E2E: required by the hello/evil registry tools (deploy/compose/tools/registry.*.toml)"
       }
     ]
   },
@@ -45,14 +49,16 @@
         "https://localhost:${CONSOLE_TLS_PORT_MAIN}/callback",
         "https://localhost:${CONSOLE_TLS_PORT_DIST}/callback",
         "https://localhost:${CONSOLE_TLS_PORT_IDLE}/callback",
-        "https://localhost:${CONSOLE_TLS_PORT_ACR}/callback"
+        "https://localhost:${CONSOLE_TLS_PORT_ACR}/callback",
+        "https://localhost:${CONSOLE_TLS_PORT_KA503}/callback",
+        "https://console.ops.test:${CONSOLE_TLS_PORT_PRODLIKE}/callback"
       ],
       "webOrigins": [
         "+"
       ],
       "attributes": {
         "pkce.code.challenge.method": "S256",
-        "post.logout.redirect.uris": "https://localhost:${CONSOLE_TLS_PORT_RUN}/logged-out##https://localhost:${CONSOLE_TLS_PORT_MAIN}/logged-out##https://localhost:${CONSOLE_TLS_PORT_DIST}/logged-out##https://localhost:${CONSOLE_TLS_PORT_IDLE}/logged-out##https://localhost:${CONSOLE_TLS_PORT_ACR}/logged-out",
+        "post.logout.redirect.uris": "https://localhost:${CONSOLE_TLS_PORT_RUN}/logged-out##https://localhost:${CONSOLE_TLS_PORT_MAIN}/logged-out##https://localhost:${CONSOLE_TLS_PORT_DIST}/logged-out##https://localhost:${CONSOLE_TLS_PORT_IDLE}/logged-out##https://localhost:${CONSOLE_TLS_PORT_ACR}/logged-out##https://localhost:${CONSOLE_TLS_PORT_KA503}/logged-out##https://console.ops.test:${CONSOLE_TLS_PORT_PRODLIKE}/logged-out",
         "client.session.idle.timeout": "900",
         "client.session.max.lifespan": "43200",
         "use.refresh.tokens": "true",
@@ -112,7 +118,8 @@
         }
       ],
       "realmRoles": [
-        "console-user"
+        "console-user",
+        "hello:user"
       ]
     },
     {
@@ -137,7 +144,8 @@
       ],
       "realmRoles": [
         "console-user",
-        "console-admin"
+        "console-admin",
+        "hello:user"
       ]
     },
     {
@@ -183,7 +191,8 @@
         }
       ],
       "realmRoles": [
-        "console-user"
+        "console-user",
+        "hello:user"
       ]
     },
     {
@@ -207,7 +216,8 @@
         }
       ],
       "realmRoles": [
-        "console-user"
+        "console-user",
+        "hello:user"
       ]
     },
     {
@@ -231,7 +241,8 @@
         }
       ],
       "realmRoles": [
-        "console-user"
+        "console-user",
+        "hello:user"
       ]
     },
     {
@@ -255,7 +266,8 @@
         }
       ],
       "realmRoles": [
-        "console-user"
+        "console-user",
+        "hello:user"
       ]
     },
     {
@@ -279,7 +291,8 @@
         }
       ],
       "realmRoles": [
-        "console-user"
+        "console-user",
+        "hello:user"
       ]
     },
     {
@@ -299,6 +312,31 @@
         {
           "type": "password",
           "value": "dev-only-derole_firefox",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "console-user",
+        "hello:user"
+      ]
+    },
+    {
+      "username": "nohello_user",
+      "email": "nohello_user@console.dev.invalid",
+      "firstName": "No",
+      "lastName": "Hello",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "attributes": {
+        "dev_only": [
+          "DEV ONLY test user (console-user without hello:user); password dev-only-nohello_user; never import outside local compose"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-nohello_user",
           "temporary": false
         }
       ],

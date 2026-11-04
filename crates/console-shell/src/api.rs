@@ -3,6 +3,7 @@
 
 use crate::session::{LoginNotice, LogoutResponse, SessionInfo, login_url};
 use console_protocol::session::SessionUser;
+use console_protocol::{LaunchResponse, ToolNavItem, ToolSummary, ToolsResponse};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::wasm_bindgen::{JsCast, JsValue};
 use web_sys::{Request, RequestCredentials, RequestInit, Response};
@@ -117,6 +118,71 @@ impl FromJs for SessionInfo {
     }
 }
 
+fn string_array(v: &JsValue, k: &str) -> Option<Vec<String>> {
+    match field(v, k) {
+        None => Some(Vec::new()),
+        Some(a) if !js_sys::Array::is_array(&a) => None,
+        // Non-string members are skipped (lenient, like serde's default).
+        Some(a) => Some(
+            js_sys::Array::from(&a)
+                .iter()
+                .filter_map(|x| x.as_string())
+                .collect(),
+        ),
+    }
+}
+
+impl FromJs for ToolSummary {
+    fn from_js(v: &JsValue) -> Option<Self> {
+        let nav = match field(v, "nav") {
+            None => Vec::new(),
+            Some(a) if !js_sys::Array::is_array(&a) => return None,
+            Some(a) => js_sys::Array::from(&a)
+                .iter()
+                .filter_map(|n| {
+                    Some(ToolNavItem {
+                        label: string(&n, "label")?,
+                        path: string(&n, "path")?,
+                    })
+                })
+                .collect(),
+        };
+        Some(ToolSummary {
+            id: string(v, "id")?,
+            title: string(v, "title")?,
+            category: string(v, "category"),
+            icon: string(v, "icon"),
+            origin: string(v, "origin")?,
+            entry: string(v, "entry").unwrap_or_else(|| "/".to_owned()),
+            nav,
+            scopes: string_array(v, "scopes")?,
+        })
+    }
+}
+
+impl FromJs for ToolsResponse {
+    fn from_js(v: &JsValue) -> Option<Self> {
+        let tools = match field(v, "tools") {
+            None => Vec::new(),
+            Some(a) if !js_sys::Array::is_array(&a) => return None,
+            // One bad entry is dropped instead of failing the whole menu.
+            Some(a) => js_sys::Array::from(&a)
+                .iter()
+                .filter_map(|t| ToolSummary::from_js(&t))
+                .collect(),
+        };
+        Some(ToolsResponse { tools })
+    }
+}
+
+impl FromJs for LaunchResponse {
+    fn from_js(v: &JsValue) -> Option<Self> {
+        Some(LaunchResponse {
+            url: string(v, "url")?,
+        })
+    }
+}
+
 impl FromJs for LogoutResponse {
     fn from_js(v: &JsValue) -> Option<Self> {
         Some(LogoutResponse {
@@ -130,16 +196,24 @@ async fn fetch_json<T: FromJs>(
     method: &str,
     path: &str,
     csrf: Option<&str>,
+    body: Option<&str>,
     on401: On401,
 ) -> Result<T, ApiError> {
     let win = web_sys::window().ok_or(ApiError::Network)?;
     let init = RequestInit::new();
     init.set_method(method);
     init.set_credentials(RequestCredentials::SameOrigin);
+    if let Some(b) = body {
+        init.set_body(&JsValue::from_str(b));
+    }
     let req = Request::new_with_str_and_init(path, &init).map_err(|_| ApiError::Network)?;
     let h = req.headers();
     h.set("Accept", "application/json")
         .map_err(|_| ApiError::Network)?;
+    if body.is_some() {
+        h.set("Content-Type", "application/json")
+            .map_err(|_| ApiError::Network)?;
+    }
     if let Some(t) = csrf {
         h.set("X-CSRF-Token", t).map_err(|_| ApiError::Network)?;
     }
@@ -170,7 +244,7 @@ async fn fetch_json<T: FromJs>(
 }
 
 pub async fn get_session() -> Result<SessionInfo, ApiError> {
-    fetch_json("GET", "/api/session", None, On401::Load).await
+    fetch_json("GET", "/api/session", None, None, On401::Load).await
 }
 
 pub async fn keepalive(csrf: &str) -> Result<SessionInfo, ApiError> {
@@ -178,13 +252,54 @@ pub async fn keepalive(csrf: &str) -> Result<SessionInfo, ApiError> {
         "POST",
         "/api/session/keepalive",
         Some(csrf),
+        None,
         On401::Keepalive,
     )
     .await
 }
 
 pub async fn logout(csrf: &str) -> Result<LogoutResponse, ApiError> {
-    fetch_json("POST", "/logout", Some(csrf), On401::Load).await
+    fetch_json("POST", "/logout", Some(csrf), None, On401::Load).await
+}
+
+/// `GET /api/tools`: the registry view, already filtered by role on the
+/// server (POAM-010). Entries that fail [`crate::tools::accept_tool`] are
+/// dropped, not fatal.
+pub async fn get_tools() -> Result<ToolsResponse, ApiError> {
+    fetch_json(
+        "GET",
+        console_protocol::tools::ROUTE_TOOLS,
+        None,
+        None,
+        On401::Load,
+    )
+    .await
+}
+
+/// `POST /api/tools/{id}/launch` with `{"path": ..}` (`{}` = registry entry).
+/// 403 is a role denial and 404 an unknown tool (`ApiError::Status`).
+pub async fn launch_tool(
+    id: &str,
+    path: Option<&str>,
+    csrf: &str,
+) -> Result<LaunchResponse, ApiError> {
+    // `JSON.stringify` keeps serde_json out of the request path.
+    let obj = js_sys::Object::new();
+    if let Some(p) = path {
+        js_sys::Reflect::set(&obj, &JsValue::from_str("path"), &JsValue::from_str(p))
+            .map_err(|_| ApiError::Network)?;
+    }
+    let body: String = js_sys::JSON::stringify(&obj)
+        .map_err(|_| ApiError::Network)?
+        .into();
+    fetch_json(
+        "POST",
+        &console_protocol::tools::launch_route(id),
+        Some(csrf),
+        Some(&body),
+        On401::Load,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -265,6 +380,31 @@ mod wasm_tests {
             let want: LogoutResponse = serde_json::from_str(raw).unwrap();
             assert_eq!(LogoutResponse::from_js(&parse(raw)), Some(want));
         }
+    }
+
+    const TOOLS_FIXTURES: &[&str] = &[
+        include_str!("../../console-protocol/tests/fixtures/tools_v1/tools_response.json"),
+        r#"{"tools":[{"id":"a","title":"A","origin":"https://a.t","future":1}],"next":2}"#,
+    ];
+
+    #[wasm_bindgen_test]
+    fn tools_fixtures_decode_like_serde() {
+        for raw in TOOLS_FIXTURES {
+            let want: ToolsResponse = serde_json::from_str(raw).unwrap();
+            assert_eq!(ToolsResponse::from_js(&parse(raw)), Some(want));
+        }
+        let raw =
+            include_str!("../../console-protocol/tests/fixtures/tools_v1/launch_response.json");
+        let want: LaunchResponse = serde_json::from_str(raw).unwrap();
+        assert_eq!(LaunchResponse::from_js(&parse(raw)), Some(want));
+    }
+
+    #[wasm_bindgen_test]
+    fn bad_tool_entry_is_dropped_not_fatal() {
+        let raw = r#"{"tools":[{"id":"a","title":"A","origin":"https://a.example"},{"id":"b"}]}"#;
+        let got = ToolsResponse::from_js(&parse(raw)).unwrap();
+        assert_eq!(got.tools.len(), 1);
+        assert_eq!(ToolsResponse::from_js(&parse(r#"{"tools":"x"}"#)), None);
     }
 
     #[wasm_bindgen_test]

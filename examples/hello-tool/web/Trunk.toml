@@ -1,0 +1,6 @@
+[build]
+target = "index.html"
+dist = "dist"
+# Relative asset URLs; the server injects <base href="/t/<id>/"> so one build
+# serves every tool id (hello, evil) and every deep link.
+public_url = "./"

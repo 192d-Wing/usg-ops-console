@@ -1,6 +1,7 @@
-//! Contexts the shell provides to routed pages (and, in M4, the SDK bridge).
+//! Contexts the shell provides to routed pages and the tool container.
 
 use crate::session::SessionInfo;
+use crate::theme::ThemePref;
 use console_protocol::Scope;
 use console_ui::{AlertKind, NavLink};
 use std::rc::Rc;
@@ -12,6 +13,9 @@ pub struct PageMeta {
     pub title: AttrValue,
     pub description: Option<AttrValue>,
     pub breadcrumbs: Vec<NavLink>,
+    /// Page part of `document.title` when it differs from `title` (a tool's
+    /// `SetTitle`, e.g. "Report - Hello Tool"). `None` uses `title`.
+    pub document_title: Option<AttrValue>,
 }
 
 impl PageMeta {
@@ -25,6 +29,7 @@ impl PageMeta {
             ],
             title,
             description: None,
+            document_title: None,
         }
     }
 }
@@ -78,4 +83,12 @@ pub fn use_page_meta(meta: PageMeta) {
             c.set_page.emit(meta);
         }
     });
+}
+
+/// Current theme preference (the toggle in the top bar). Tools receive
+/// `ThemePref::as_str()` ("light" | "dark" | "system") in `Init` /
+/// `ThemeChanged`; "system" means follow `prefers-color-scheme`.
+#[derive(Clone, Copy, PartialEq)]
+pub struct ThemeCtx {
+    pub pref: ThemePref,
 }

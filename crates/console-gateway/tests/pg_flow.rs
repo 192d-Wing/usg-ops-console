@@ -53,6 +53,25 @@ async fn setup(extra: &[(&str, &str)]) -> Option<Env> {
 }
 
 async fn setup_with(extra: &[(&str, &str)], login_per_minute: u32) -> Option<Env> {
+    setup_full(extra, login_per_minute, None).await
+}
+
+/// Env with the test registry against a fresh echo upstream.
+async fn setup_tools(extra: &[(&str, &str)]) -> Option<(Env, Echo)> {
+    if std::env::var("CONSOLE_TEST_DATABASE_URL").is_err() {
+        println!("NOT RUN: CONSOLE_TEST_DATABASE_URL unset");
+        return None;
+    }
+    let echo = start_echo().await;
+    let env = setup_full(extra, 1000, Some(registry_toml(echo.port))).await?;
+    Some((env, echo))
+}
+
+async fn setup_full(
+    extra: &[(&str, &str)],
+    login_per_minute: u32,
+    registry: Option<String>,
+) -> Option<Env> {
     let Ok(admin) = std::env::var("CONSOLE_TEST_DATABASE_URL") else {
         println!("NOT RUN: CONSOLE_TEST_DATABASE_URL unset");
         return None;
@@ -141,6 +160,7 @@ async fn setup_with(extra: &[(&str, &str)], login_per_minute: u32) -> Option<Env
 
     let stub = start_stub_idp().await;
     let cfg = config(&stub.issuer, extra);
+    let cfg_for_tools = cfg.clone();
     let clock = ManualClock::at(t0());
     *stub.clock.lock().unwrap() = Some(clock.clone());
     let oidc = OidcClient::discover(&cfg, clock.clone()).await.unwrap();
@@ -153,6 +173,10 @@ async fn setup_with(extra: &[(&str, &str)], login_per_minute: u32) -> Option<Env
         oidc: Arc::new(oidc),
         clock: clock.clone(),
         login_limiter: RateLimiter::per_minute(login_per_minute),
+        tools: Arc::new(match &registry {
+            Some(r) => tools_state(&cfg_for_tools, r),
+            None => console_gateway::registry::ToolsState::empty(),
+        }),
     });
     Some(Env {
         router: app(state.clone(), ""),
@@ -1210,4 +1234,920 @@ async fn pg_form_logout_with_json_accept_and_limits() {
         csp.contains(&format!("form-action 'self' {issuer_origin}")),
         "SEC-004: {csp}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// M4: tools (launch handoff, proxy, assertion, lifecycle, limits, POAM-031)
+// ---------------------------------------------------------------------------
+
+const TIGHT_HOST: &str = "tight.tools.test";
+
+impl Env {
+    async fn csrf(&self, sid: &str) -> String {
+        let (st, info) = self.session_json(sid).await;
+        assert_eq!(st, StatusCode::OK);
+        info["csrf_token"].as_str().unwrap().to_owned()
+    }
+
+    async fn launch(
+        &self,
+        sid: &str,
+        csrf: Option<&str>,
+        tool: &str,
+        body: &str,
+    ) -> Response<Body> {
+        let mut b = Request::post(format!("/api/tools/{tool}/launch"))
+            .header(header::COOKIE, format!("__Host-console_sid={sid}"))
+            .header(header::ORIGIN, PUBLIC_URL)
+            .header(header::CONTENT_TYPE, "application/json");
+        if let Some(c) = csrf {
+            b = b.header("x-csrf-token", c);
+        }
+        self.call(b.body(Body::from(body.to_owned())).unwrap())
+            .await
+    }
+
+    /// Launch URL for `tool` (asserts 200).
+    async fn launch_url(&self, sid: &str, tool: &str, body: &str) -> String {
+        let csrf = self.csrf(sid).await;
+        let res = self.launch(sid, Some(&csrf), tool, body).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        body_json(res).await["url"].as_str().unwrap().to_owned()
+    }
+
+    /// GETs a launch URL on `host` the way the shell's tool iframe does
+    /// (Fetch Metadata `iframe` / `same-site`, SEC-001).
+    async fn exchange(&self, host: &str, url: &str) -> Response<Body> {
+        self.exchange_with(
+            host,
+            url,
+            &[
+                ("sec-fetch-dest", "iframe"),
+                ("sec-fetch-site", "same-site"),
+            ],
+        )
+        .await
+    }
+
+    /// GETs a launch URL on `host` with exactly `headers`.
+    async fn exchange_with(
+        &self,
+        host: &str,
+        url: &str,
+        headers: &[(&str, &str)],
+    ) -> Response<Body> {
+        let u = url::Url::parse(url).unwrap();
+        let pq = format!("{}?{}", u.path(), u.query().unwrap_or_default());
+        let mut b = Request::get(pq).header(header::HOST, host);
+        for (k, v) in headers {
+            b = b.header(*k, *v);
+        }
+        self.call(b.body(Body::empty()).unwrap()).await
+    }
+
+    /// Launch + exchange; returns the `__Host-tool_sid` value.
+    async fn open_tool(&self, sid: &str, tool: &str, host: &str) -> String {
+        let url = self.launch_url(sid, tool, "{}").await;
+        let res = self.exchange(host, &url).await;
+        assert_eq!(res.status(), StatusCode::SEE_OTHER);
+        set_cookies(&res)["__Host-tool_sid"].clone()
+    }
+
+    fn tool_req(&self, host: &str, path: &str, tool_sid: &str) -> axum::http::request::Builder {
+        Request::get(path)
+            .header(header::HOST, host)
+            .header(header::COOKIE, format!("__Host-tool_sid={tool_sid}"))
+    }
+
+    async fn count(&self, table: &str) -> i64 {
+        sqlx::query_scalar(&format!("SELECT count(*) FROM {table}"))
+            .fetch_one(&self.owner)
+            .await
+            .unwrap()
+    }
+
+    async fn tool_audit(
+        &self,
+    ) -> Vec<(
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<i32>,
+    )> {
+        // Proxy-path rows are written by the background queue (PERF-002).
+        self.state.audit.flush().await;
+        sqlx::query(
+            "SELECT event_type, outcome, reason, tool_id, path, http_status FROM audit_events \
+             WHERE event_type LIKE 'tool.%' ORDER BY id",
+        )
+        .fetch_all(&self.audit)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|r| (r.get(0), r.get(1), r.get(2), r.get(3), r.get(4), r.get(5)))
+        .collect()
+    }
+}
+
+/// Verifies an assertion the way a tool must: JWKS from the console origin,
+/// key by `kid`, ES256 pinned, `aud` = own id, `iss` = console.
+async fn verify_assertion(env: &Env, token: &str, aud: &str) -> console_protocol::AssertionClaims {
+    use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, decode_header, jwk::JwkSet};
+    let res = env
+        .call(
+            Request::get("/.well-known/jwks.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    let set: JwkSet = serde_json::from_value(body_json(res).await).unwrap();
+    let h = decode_header(token).unwrap();
+    assert_eq!(h.alg, Algorithm::ES256);
+    assert_eq!(h.typ.as_deref(), Some("console-assertion+jwt"));
+    let jwk = set.find(h.kid.as_deref().unwrap()).expect("kid in JWKS");
+    let mut v = Validation::new(Algorithm::ES256);
+    v.set_audience(&[aud]);
+    v.set_issuer(&[PUBLIC_URL]);
+    decode::<console_protocol::AssertionClaims>(token, &DecodingKey::from_jwk(jwk).unwrap(), &v)
+        .expect("assertion verifies with the published JWKS")
+        .claims
+}
+
+#[tokio::test]
+async fn pg_tool_launch_proxy_and_assertion() {
+    let Some((env, echo)) = setup_tools(&[]).await else {
+        return;
+    };
+    let (_, sid) = env
+        .login(
+            "/",
+            &["console-user", "hello:user", "hello:admin", "other:x"],
+            None,
+        )
+        .await;
+    let sid = sid.unwrap();
+    let (_, info) = env.session_json(&sid).await;
+    assert_eq!(
+        info["roles"],
+        serde_json::json!(["console-user", "hello:admin", "hello:user"]),
+        "registry-used roles kept; unrelated roles dropped"
+    );
+
+    // /api/tools: filtered by roles, browser-safe shape.
+    let res = env.call(env.get("/api/tools", &sid)).await;
+    assert_eq!(res.headers()[header::CACHE_CONTROL], "no-store");
+    let tools = body_json(res).await;
+    let ids: Vec<&str> = tools["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["hello", "tight", "dead"], "`denied` hidden");
+    assert_eq!(tools["tools"][0]["origin"], HELLO_ORIGIN);
+    assert!(
+        !tools.to_string().contains("127.0.0.1"),
+        "no upstream leaked"
+    );
+
+    // Launch: CSRF, unknown tool, bad path.
+    let csrf = env.csrf(&sid).await;
+    assert_eq!(
+        env.launch(&sid, None, "hello", "{}").await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        env.launch(&sid, Some(&csrf), "nope", "{}").await.status(),
+        StatusCode::NOT_FOUND
+    );
+    for bad in [
+        r#"{"path":"//evil.example"}"#,
+        r#"{"path":"https://x"}"#,
+        r#"{"path":"/../x"}"#,
+        "nope",
+    ] {
+        let res = env.launch(&sid, Some(&csrf), "hello", bad).await;
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST, "{bad}");
+    }
+    let url = env.launch_url(&sid, "hello", r#"{"path":"/x?y=1"}"#).await;
+    assert!(
+        url.starts_with(&format!("{HELLO_ORIGIN}/_console/launch?code=")),
+        "{url}"
+    );
+
+    // Exchange: 303 into /t/hello, strict host-only cookie, single use.
+    let res = env.exchange(HELLO_HOST, &url).await;
+    assert_eq!(res.status(), StatusCode::SEE_OTHER);
+    assert_eq!(location(&res), "/t/hello/x?y=1");
+    assert_eq!(res.headers()[header::REFERRER_POLICY], "no-referrer");
+    let attrs = cookie_attrs(&res, "__Host-tool_sid").unwrap();
+    for flag in ["Secure", "HttpOnly", "SameSite=Strict", "Path=/"] {
+        assert!(attrs.contains(flag), "{attrs}");
+    }
+    assert!(!attrs.contains("Domain") && !attrs.contains("Max-Age"));
+    let tool_sid = set_cookies(&res)["__Host-tool_sid"].clone();
+    assert_eq!(
+        env.exchange(HELLO_HOST, &url).await.status(),
+        StatusCode::UNAUTHORIZED,
+        "single use"
+    );
+
+    let last_seen = |env: &Env| {
+        let pool = env.owner.clone();
+        async move {
+            sqlx::query_scalar::<_, chrono::DateTime<chrono::Utc>>(
+                "SELECT last_seen_at FROM sessions",
+            )
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    let before = last_seen(&env).await;
+    env.clock.advance(5);
+
+    // Spoofed identity never reaches the upstream.
+    let spoofed = |path: &str| {
+        env.tool_req(HELLO_HOST, path, &tool_sid)
+            .header(
+                header::COOKIE,
+                format!("__Host-console_sid={sid}; app=1; __Host-console_auth=x"),
+            )
+            .header("x-console-user", "admin")
+            .header("X-Console-Roles", "admin")
+            .header("x-console-assertion", "forged")
+            .header("x-forwarded-user", "admin")
+            .header("x-forwarded-for", "6.6.6.6")
+            .header("forwarded", "for=6.6.6.6")
+            .header("x-real-ip", "6.6.6.6")
+            .header("authorization", "Bearer stolen")
+            .header("x-console-scope", "site=dc1;tenant=t1")
+            .header("x-hello-csrf", "c")
+            .header("connection", "x-hello-csrf")
+            .header("sec-fetch-mode", "navigate")
+            .body(Body::empty())
+            .unwrap()
+    };
+    let res = env.call(spoofed("/t/hello/echo?q=1")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let seen = echo.last();
+    assert_eq!(
+        seen.uri, "/t/hello/echo?q=1",
+        "path + query forwarded verbatim"
+    );
+    let h = &seen.headers;
+    for gone in [
+        "x-console-user",
+        "x-console-roles",
+        "x-forwarded-user",
+        "forwarded",
+        "x-real-ip",
+        "authorization",
+        "x-console-scope",
+        "x-hello-csrf",
+    ] {
+        assert!(!h.contains_key(gone), "{gone} reached the upstream");
+    }
+    assert_eq!(
+        h["cookie"], "app=1",
+        "console/tool session cookies never forwarded"
+    );
+    assert_ne!(h["x-console-assertion"], "forged");
+    assert_eq!(h.get_all("x-console-assertion").iter().count(), 1);
+    assert!(h.get("x-forwarded-for").is_none_or(|v| v != "6.6.6.6"));
+    assert_eq!(h["x-forwarded-proto"], "https");
+    assert_eq!(h["x-forwarded-host"], HELLO_HOST);
+    assert!(h.contains_key("x-request-id"));
+    assert_eq!(h["host"], format!("127.0.0.1:{}", echo.port));
+
+    // Response filtering.
+    let cookies: Vec<String> = res
+        .headers()
+        .get_all(header::SET_COOKIE)
+        .iter()
+        .map(|v| v.to_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(cookies, vec!["pref=dark; Path=/"]);
+    assert!(res.headers().get(header::SERVER).is_none());
+    assert_eq!(
+        res.headers()[header::STRICT_TRANSPORT_SECURITY],
+        "max-age=31536000; includeSubDomains"
+    );
+    assert!(
+        res.headers()[header::CONTENT_SECURITY_POLICY]
+            .to_str()
+            .unwrap()
+            .starts_with(&format!("frame-ancestors {PUBLIC_URL};"))
+    );
+
+    // The assertion verifies against the JWKS and carries the agreed claims.
+    let token = h["x-console-assertion"].to_str().unwrap().to_owned();
+    let c = verify_assertion(&env, &token, "hello").await;
+    assert_eq!(c.sub, "sub-123");
+    assert_eq!(c.preferred_username, "jdoe");
+    assert_eq!(c.name, "Jane Doe");
+    assert_eq!(
+        c.roles,
+        ["hello:admin", "hello:user"],
+        "forward_roles prefixes only"
+    );
+    assert_eq!(c.ctx.site.as_deref(), Some("dc1"));
+    assert_eq!(c.ctx.tenant, None, "tenant not in the registry scopes");
+    assert_eq!(c.exp - c.iat, 60);
+    assert_eq!(c.nbf, c.iat);
+    assert_eq!(c.acr.as_deref(), Some(ACR));
+    assert_eq!(c.sid.len(), 22);
+    let session_ref: String = info["user"]["id"].as_str().unwrap().to_owned();
+    assert_ne!(c.sid, session_ref);
+    let sref = console_gateway::session::session_ref(
+        &console_gateway::session::hash_cookie_value(&sid).unwrap(),
+    );
+    assert!(!c.sid.contains(&sref), "sid is not the console session ref");
+    assert!(verify_assertion_fails_for_other_aud(&env, &token).await);
+
+    // A second request: same pseudonym, fresh jti; spoof audited once/min.
+    let res = env.call(spoofed("/t/hello/echo")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let c2 = verify_assertion(
+        &env,
+        echo.last().headers["x-console-assertion"].to_str().unwrap(),
+        "hello",
+    )
+    .await;
+    assert_eq!(c2.sid, c.sid);
+    assert_ne!(c2.jti, c.jti);
+
+    // Location on the upstream authority is rewritten to the tool origin.
+    let res = env
+        .call(
+            env.tool_req(HELLO_HOST, "/t/hello/redirect", &tool_sid)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::FOUND);
+    assert_eq!(location(&res), format!("{HELLO_ORIGIN}/t/hello/next"));
+    // SEC-004: a Location off the tool origin is refused with 502.
+    let res = env
+        .call(
+            env.tool_req(HELLO_HOST, "/t/hello/foreign-redirect", &tool_sid)
+                .header(header::ACCEPT, "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    assert!(res.headers().get(header::LOCATION).is_none());
+    assert_eq!(body_json(res).await["error"], "bad_gateway");
+
+    // State-changing request on an audit_writes tool.
+    let res = env
+        .call(
+            Request::post("/t/hello/echo")
+                .header(header::HOST, HELLO_HOST)
+                .header(header::COOKIE, format!("__Host-tool_sid={tool_sid}"))
+                .header("sec-fetch-mode", "cors")
+                .header("sec-fetch-site", "same-origin")
+                .body(Body::from("hello"))
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(echo.last().body_len, 5, "request body streamed through");
+
+    // SDK context.
+    let res = env
+        .call(
+            env.tool_req(HELLO_HOST, "/_console/context", &tool_sid)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    let ctx: console_protocol::ToolContext = serde_json::from_value(body_json(res).await).unwrap();
+    assert_eq!(ctx.tool_id, "hello");
+    assert_eq!(ctx.console_origin, PUBLIC_URL);
+    assert_eq!(ctx.protocol, console_protocol::PROTOCOL_VERSION);
+
+    // The tool session cannot be used on another tool's origin.
+    let res = env
+        .call(
+            env.tool_req(TIGHT_HOST, "/t/tight/x", &tool_sid)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    assert_eq!(
+        last_seen(&env).await,
+        before,
+        "tool traffic never extends the console idle window"
+    );
+
+    let audit = env.tool_audit().await;
+    let has = |t: &str, o: &str, r: &str| {
+        audit
+            .iter()
+            .any(|a| a.0 == t && a.1 == o && a.2.as_deref() == Some(r))
+    };
+    assert!(has("tool.launch", "success", "launch"), "{audit:?}");
+    assert!(has("tool.access", "success", "navigation"), "{audit:?}");
+    assert!(has("tool.request", "success", "write"), "{audit:?}");
+    assert!(
+        has("tool.denied", "denied", "bad_code"),
+        "reused code: {audit:?}"
+    );
+    assert_eq!(
+        audit
+            .iter()
+            .filter(|a| a.2.as_deref() == Some("identity_header_stripped"))
+            .count(),
+        1,
+        "spoofing audited once per tool session per minute: {audit:?}"
+    );
+    let launch = audit.iter().find(|a| a.0 == "tool.launch").unwrap();
+    assert_eq!(launch.3.as_deref(), Some("hello"));
+    assert_eq!(launch.4.as_deref(), Some("/x"), "no query in audit paths");
+    let access = audit.iter().find(|a| a.0 == "tool.access").unwrap();
+    assert_eq!(access.4.as_deref(), Some("/t/hello/echo"));
+    assert_eq!(access.5, Some(200));
+}
+
+async fn verify_assertion_fails_for_other_aud(env: &Env, token: &str) -> bool {
+    use jsonwebtoken::{Algorithm, DecodingKey, Validation, decode, jwk::JwkSet};
+    let res = env
+        .call(
+            Request::get("/.well-known/jwks.json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    let set: JwkSet = serde_json::from_value(body_json(res).await).unwrap();
+    let mut v = Validation::new(Algorithm::ES256);
+    v.set_audience(&["evil"]);
+    decode::<console_protocol::AssertionClaims>(
+        token,
+        &DecodingKey::from_jwk(&set.keys[0]).unwrap(),
+        &v,
+    )
+    .is_err()
+}
+
+#[tokio::test]
+async fn pg_tool_role_denied() {
+    let Some((env, echo)) = setup_tools(&[]).await else {
+        return;
+    };
+    let (_, sid) = env.login("/", &["console-user"], None).await;
+    let sid = sid.unwrap();
+    let tools = body_json(env.call(env.get("/api/tools", &sid)).await).await;
+    let ids: Vec<&str> = tools["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["tight", "dead"]);
+    let csrf = env.csrf(&sid).await;
+    // INT-009: identical to an unknown id, decided before the body is
+    // parsed (a malformed body still gets 404, not 400).
+    let unknown = env.launch(&sid, Some(&csrf), "nope", "{}").await;
+    assert_eq!(unknown.status(), StatusCode::NOT_FOUND);
+    let unknown = body_json(unknown).await;
+    for body in ["{}", "not json"] {
+        let res = env.launch(&sid, Some(&csrf), "hello", body).await;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body_json(res).await, unknown);
+    }
+    assert_eq!(
+        env.count("tool_launch_codes").await,
+        0,
+        "no code for a denied launch"
+    );
+
+    // Roles removed after the tool session exists: the proxy re-checks.
+    let (_, sid2) = env.login("/", &["console-user", "hello:user"], None).await;
+    let sid2 = sid2.unwrap();
+    let tool_sid = env.open_tool(&sid2, "hello", HELLO_HOST).await;
+    sqlx::query("UPDATE sessions SET roles = ARRAY['console-user']")
+        .execute(&env.owner)
+        .await
+        .unwrap();
+    let calls = echo.count();
+    let res = env
+        .call(
+            env.tool_req(HELLO_HOST, "/t/hello/echo", &tool_sid)
+                .header(header::ACCEPT, "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_json(res).await["error"], "forbidden");
+    assert_eq!(
+        echo.count(),
+        calls,
+        "denied requests never reach the upstream"
+    );
+    let audit = env.tool_audit().await;
+    assert!(audit.iter().any(|a| a.0 == "tool.denied"
+        && a.1 == "denied"
+        && a.2.as_deref() == Some("missing_role")
+        && a.5 == Some(404)));
+    assert!(
+        !audit
+            .iter()
+            .any(|a| a.0 == "tool.launch" && a.1 == "denied"),
+        "a denial is tool.denied, not tool.launch"
+    );
+    assert!(audit.iter().any(|a| a.0 == "tool.denied"
+        && a.2.as_deref() == Some("missing_role")
+        && a.5 == Some(403)));
+}
+
+#[tokio::test]
+async fn pg_tool_session_lifecycle() {
+    let Some((env, _echo)) = setup_tools(&[]).await else {
+        return;
+    };
+    let roles = ["console-user", "hello:user"];
+    let (_, sid) = env.login("/", &roles, None).await;
+    let sid = sid.unwrap();
+
+    // INT-005: each launch (tab) gets its own tool session; up to 8 per
+    // console session and tool, the oldest launch evicted beyond that.
+    let get = |t: &str| {
+        env.tool_req(HELLO_HOST, "/t/hello/echo", t)
+            .body(Body::empty())
+            .unwrap()
+    };
+    let mut tabs = Vec::new();
+    for _ in 0..8 {
+        tabs.push(env.open_tool(&sid, "hello", HELLO_HOST).await);
+        env.clock.advance(1);
+    }
+    assert_eq!(env.count("tool_sessions").await, 8);
+    for t in &tabs {
+        assert_eq!(
+            env.call(get(t)).await.status(),
+            StatusCode::OK,
+            "parallel tabs"
+        );
+    }
+    let tight = env.open_tool(&sid, "tight", TIGHT_HOST).await;
+    let tool_sid = env.open_tool(&sid, "hello", HELLO_HOST).await;
+    assert_eq!(env.count("tool_sessions").await, 9, "8 hello + 1 tight");
+    assert_eq!(
+        env.call(get(&tabs[0])).await.status(),
+        StatusCode::UNAUTHORIZED,
+        "oldest launch evicted"
+    );
+    for t in tabs.iter().skip(1).chain([&tool_sid]) {
+        assert_eq!(env.call(get(t)).await.status(), StatusCode::OK);
+    }
+    let tight_req = env
+        .tool_req(TIGHT_HOST, "/t/tight/echo", &tight)
+        .body(Body::empty())
+        .unwrap();
+    assert_eq!(
+        env.call(tight_req).await.status(),
+        StatusCode::OK,
+        "other tool's sessions untouched"
+    );
+
+    // SEC-001: a launch URL opened outside the console's tool iframe (a
+    // top-level link, a cross-site frame) gets 401, no cookie, and the code
+    // is not consumed.
+    let url = env.launch_url(&sid, "hello", "{}").await;
+    for ctx in [
+        &[("sec-fetch-dest", "document"), ("sec-fetch-site", "none")][..],
+        &[
+            ("sec-fetch-dest", "document"),
+            ("sec-fetch-site", "cross-site"),
+        ][..],
+        &[
+            ("sec-fetch-dest", "iframe"),
+            ("sec-fetch-site", "cross-site"),
+        ][..],
+        &[][..],
+        &[("referer", "https://evil.example/")][..],
+    ] {
+        let res = env.exchange_with(HELLO_HOST, &url, ctx).await;
+        assert_eq!(res.status(), StatusCode::UNAUTHORIZED, "{ctx:?}");
+        assert!(
+            cookie_attrs(&res, "__Host-tool_sid").is_none(),
+            "no cookie: {ctx:?}"
+        );
+    }
+    let audit = env.tool_audit().await;
+    assert!(
+        audit
+            .iter()
+            .any(|a| a.0 == "tool.denied" && a.2.as_deref() == Some("launch_context")),
+        "{audit:?}"
+    );
+    let res = env
+        .exchange_with(
+            HELLO_HOST,
+            &url,
+            &[("referer", &format!("{PUBLIC_URL}/tools/hello/"))],
+        )
+        .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::SEE_OTHER,
+        "no Fetch Metadata: console Referer accepted; code still valid"
+    );
+
+    // Codes: expiry, wrong origin, single use.
+    let url = env.launch_url(&sid, "hello", "{}").await;
+    env.clock.advance(31);
+    assert_eq!(
+        env.exchange(HELLO_HOST, &url).await.status(),
+        StatusCode::UNAUTHORIZED,
+        "expired"
+    );
+    let url = env.launch_url(&sid, "hello", "{}").await;
+    assert_eq!(
+        env.exchange(TIGHT_HOST, &url).await.status(),
+        StatusCode::UNAUTHORIZED,
+        "wrong tool origin"
+    );
+    assert_eq!(
+        env.exchange(HELLO_HOST, &url).await.status(),
+        StatusCode::UNAUTHORIZED,
+        "consumed"
+    );
+
+    // Sweeper removes expired codes.
+    let _ = env.launch_url(&sid, "hello", "{}").await;
+    assert_eq!(env.count("tool_launch_codes").await, 1);
+    env.clock.advance(31);
+    sweeper::sweep_once(&env.state).await.unwrap();
+    assert_eq!(env.count("tool_launch_codes").await, 0);
+
+    // Logout kills the tool session and any outstanding code.
+    let url = env.launch_url(&sid, "hello", "{}").await;
+    let csrf = env.csrf(&sid).await;
+    let res = env
+        .call(env.post("/logout", &sid, Some(&csrf), Some(PUBLIC_URL)))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(env.count("tool_sessions").await, 0);
+    assert_eq!(env.count("tool_launch_codes").await, 0);
+    let res = env.call(get(&tool_sid)).await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        cookie_attrs(&res, "__Host-tool_sid")
+            .unwrap()
+            .contains("Max-Age=0")
+    );
+    assert_eq!(
+        env.exchange(HELLO_HOST, &url).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+
+    // Console idle expiry blocks tool requests (and ends the console session).
+    let (_, sid) = env.login("/", &roles, None).await;
+    let sid = sid.unwrap();
+    let tool_sid = env.open_tool(&sid, "hello", HELLO_HOST).await;
+    env.clock.advance(901);
+    let res = env
+        .call(
+            env.tool_req(HELLO_HOST, "/t/hello/echo", &tool_sid)
+                .header(header::ACCEPT, "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(body_json(res).await["reason"], "idle_timeout");
+    assert_eq!(env.session_rows().await, 0);
+    assert!(
+        env.audit_types()
+            .await
+            .iter()
+            .any(|(t, _, r)| t == "session.expired.idle" && r.as_deref() == Some("on_access"))
+    );
+}
+
+#[tokio::test]
+async fn pg_tool_proxy_limits() {
+    let Some((env, echo)) = setup_tools(&[]).await else {
+        return;
+    };
+    let (_, sid) = env.login("/", &["console-user", "hello:user"], None).await;
+    let sid = sid.unwrap();
+    let hello = env.open_tool(&sid, "hello", HELLO_HOST).await;
+    let tight = env.open_tool(&sid, "tight", TIGHT_HOST).await;
+    let dead = env.open_tool(&sid, "dead", "dead.tools.test").await;
+    let json = |b: axum::http::request::Builder| b.header(header::ACCEPT, "application/json");
+
+    // WebSocket upgrade: 501, never proxied.
+    let calls = echo.count();
+    let res = env
+        .call(
+            json(env.tool_req(HELLO_HOST, "/t/hello/ws", &hello))
+                .header("connection", "Upgrade")
+                .header("upgrade", "websocket")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_IMPLEMENTED);
+    assert_eq!(body_json(res).await["error"], "not_implemented");
+    assert_eq!(echo.count(), calls);
+
+    // Body limit: by Content-Length up front, and while streaming.
+    let res = env
+        .call(
+            json(Request::post("/t/tight/up").header(header::HOST, TIGHT_HOST))
+                .header(header::COOKIE, format!("__Host-tool_sid={tight}"))
+                .header(header::CONTENT_LENGTH, "100")
+                .body(Body::from(vec![b'x'; 100]))
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let res = env
+        .call(
+            json(Request::post("/t/tight/up").header(header::HOST, TIGHT_HOST))
+                .header(header::COOKIE, format!("__Host-tool_sid={tight}"))
+                .body(Body::from(vec![b'x'; 100]))
+                .unwrap(),
+        )
+        .await;
+    assert!(
+        matches!(
+            res.status(),
+            StatusCode::PAYLOAD_TOO_LARGE | StatusCode::BAD_GATEWAY
+        ),
+        "streaming over-limit body is cut off: {}",
+        res.status()
+    );
+
+    // Response-header timeout → 504; unreachable upstream → 502.
+    let res = env
+        .call(
+            json(env.tool_req(TIGHT_HOST, "/t/tight/slow", &tight))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::GATEWAY_TIMEOUT);
+    assert_eq!(body_json(res).await["error"], "gateway_timeout");
+    let res = env
+        .call(
+            json(env.tool_req("dead.tools.test", "/t/dead/", &dead))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+    assert_eq!(body_json(res).await["error"], "bad_gateway");
+
+    // Streaming: the first chunk arrives before the upstream finishes, and
+    // the in-flight body holds tight's only concurrency permit.
+    let res = env
+        .call(
+            env.tool_req(TIGHT_HOST, "/t/tight/stream", &tight)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let mut body = res.into_body();
+    let first = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        http_body_util::BodyExt::frame(&mut body),
+    )
+    .await
+    .expect("first byte before the upstream finished")
+    .unwrap()
+    .unwrap();
+    assert_eq!(first.into_data().unwrap(), "first;");
+    let busy = env
+        .call(
+            json(env.tool_req(TIGHT_HOST, "/t/tight/x", &tight))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(busy.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(busy.headers()[header::RETRY_AFTER], "1");
+    echo.release.notify_one();
+    let rest = http_body_util::BodyExt::collect(body)
+        .await
+        .unwrap()
+        .to_bytes();
+    assert_eq!(&rest[..], b"last");
+    let res = env
+        .call(
+            env.tool_req(TIGHT_HOST, "/t/tight/x", &tight)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "permit released with the body"
+    );
+}
+
+/// POAM-031: two gateways with different idle limits on one database never
+/// expire each other's sessions early.
+#[tokio::test]
+async fn pg_per_session_idle_limit() {
+    let Some(env_a) = setup(&[("CONSOLE_SESSION_IDLE_SECS", "150")]).await else {
+        return;
+    };
+    let mut cfg_b = (*env_a.state.cfg).clone();
+    cfg_b.session_idle = std::time::Duration::from_secs(900);
+    let state_b = Arc::new(AppState {
+        cfg: Arc::new(cfg_b),
+        store: env_a.state.store.clone(),
+        audit: env_a.state.audit.clone(),
+        oidc: env_a.state.oidc.clone(),
+        clock: env_a.clock.clone(),
+        login_limiter: RateLimiter::per_minute(1000),
+        tools: Arc::new(console_gateway::registry::ToolsState::empty()),
+    });
+    let env_b = Env {
+        router: app(state_b.clone(), ""),
+        state: state_b.clone(),
+        clock: env_a.clock.clone(),
+        stub: env_a.stub.clone(),
+        owner: env_a.owner.clone(),
+        app: env_a.app.clone(),
+        audit: env_a.audit.clone(),
+    };
+    let (_, long) = env_b.login("/", &["console-user"], None).await;
+    let long = long.unwrap();
+    let (_, short) = env_a.login("/", &["console-user"], None).await;
+    let short = short.unwrap();
+    let (_, info) = env_a.session_json(&long).await;
+    assert_eq!(
+        info["idle_timeout_secs"], 900,
+        "row value, not the reading gateway's"
+    );
+    let idle_secs: Vec<Option<i32>> =
+        sqlx::query_scalar("SELECT idle_timeout_secs FROM sessions ORDER BY created_at")
+            .fetch_all(&env_a.owner)
+            .await
+            .unwrap();
+    assert_eq!(idle_secs.len(), 2);
+
+    env_a.clock.advance(200);
+    assert_eq!(
+        sweeper::sweep_once(&env_a.state).await.unwrap(),
+        1,
+        "only the 150 s session"
+    );
+    assert_eq!(
+        env_a.session_json(&long).await.0,
+        StatusCode::OK,
+        "the 900 s session survives gateway A"
+    );
+    assert_eq!(env_b.session_json(&short).await.0, StatusCode::UNAUTHORIZED);
+    // Gateway B's sweeper also honours rows: nothing else to sweep.
+    assert_eq!(sweeper::sweep_once(&state_b).await.unwrap(), 0);
+    env_a.clock.advance(701);
+    assert_eq!(
+        env_b.session_json(&long).await.0,
+        StatusCode::UNAUTHORIZED,
+        "900 s limit applies"
+    );
+}
+
+/// PERF-008: a slow IdP token endpoint yields a quick retryable 503; the
+/// session is neither extended nor ended.
+#[tokio::test]
+async fn pg_refresh_timeout_is_retryable_503() {
+    let Some(env) = setup(&[("CONSOLE_OIDC_REFRESH_TIMEOUT_SECS", "1")]).await else {
+        return;
+    };
+    let (_, sid) = env.login("/", &["console-user"], None).await;
+    let sid = sid.unwrap();
+    let csrf = env.csrf(&sid).await;
+    *env.stub.refresh.lock().unwrap() = RefreshMode::Slow(3);
+    let t = std::time::Instant::now();
+    let res = env
+        .call(env.post(
+            "/api/session/keepalive",
+            &sid,
+            Some(&csrf),
+            Some(PUBLIC_URL),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        t.elapsed() < std::time::Duration::from_millis(2500),
+        "{:?}",
+        t.elapsed()
+    );
+    assert_eq!(body_json(res).await["error"], "unavailable");
+    assert_eq!(env.session_json(&sid).await.0, StatusCode::OK);
 }

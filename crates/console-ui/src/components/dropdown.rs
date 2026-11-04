@@ -22,6 +22,12 @@ pub enum DropdownItem {
         id: AttrValue,
         text: AttrValue,
     },
+    /// Non-interactive status text (e.g. "Loading…", "Nothing here"). Not
+    /// focusable and skipped by arrow-key navigation (WCAG 4.1.2).
+    Note {
+        id: AttrValue,
+        text: AttrValue,
+    },
     /// One level only; a nested `Group` inside a group is ignored.
     Group {
         text: AttrValue,
@@ -139,6 +145,13 @@ fn render_item(item: &DropdownItem, key: String, ctx: &Ctx<'_>, nested: bool) ->
                 </li>
             }
         }
+        DropdownItem::Note { id, text } => html! {
+            <li class="cui-dropdown__entry" {key}>
+                <span class="cui-dropdown__note" data-testid={item_testid(ctx, id)}>
+                    { text.clone() }
+                </span>
+            </li>
+        },
         DropdownItem::Group { text, items } => {
             if nested {
                 return html! {};

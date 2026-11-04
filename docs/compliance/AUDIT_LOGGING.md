@@ -1,6 +1,10 @@
 # Audit logging
 
-Status as of M3, 2026-11-03. This file describes what the code does today.
+Status as of M4 (tool events, registry events, background audit queue),
+2026-11-04. This file describes what the code does today. M4 has not run
+in CI (pending push); M4 statements cite local runs (`make
+test-integration` 99 passed; Playwright macOS 294 passed, Linux container
+428 passed / 3 flaky, POAM-044).
 
 Evidence status: the `pg_flow` integration tests (15/15, `make
 test-integration` against compose Postgres 17) and the Playwright suite on
@@ -42,6 +46,13 @@ no `code=`, `state=`, refresh token, `eyJ` or client secret appears).
 | `user_agent` | text | Truncated to 256 bytes |
 | `reason` | text | Fixed machine code from the catalogue; never token text or request input |
 | `request_id` | text | Random per-request id for correlating the JSON line and the row |
+| `tool_id` | text, nullable (M4) | Registry tool id for `tool.*` and `registry.insecure_upstream` events |
+| `path` | text, nullable (M4) | Request or launch path **without the query** (`path_only`) |
+| `http_status` | integer, nullable (M4) | Status returned for the tool request or denial |
+| `latency_ms` | bigint, nullable (M4) | Upstream latency for proxied requests |
+
+The M4 columns are added by `migrations/0005_tool_sessions.sql`. Test:
+`tools_api::tests::audit_paths_drop_query`.
 
 No field ever carries an id_token, refresh token, authorization code,
 client secret or CSRF token. `pg_full_flow_and_audit` asserts that no
@@ -61,7 +72,24 @@ audit row contains `eyJ`.
 | `session.revoked` | success | `idp_rejected`, `missing_role`, `subject_mismatch`, `token_invalid`, `no_refresh_token` | Keepalive revalidation ended the session | Best effort |
 | `access.denied` | denied | `csrf_token`, `origin`, `rate_limited` | CSRF failure on keepalive or logout (with `user_sub` and `session_ref`), or `/login` over the per-IP rate limit (once per IP per limiter episode, not per request) | Best effort |
 
-Code: `audit::EventType`, `routes.rs` (callback, `require_session`,
+M4 events:
+
+| `event_type` | `outcome` | `reason` values | Emitted when | Write mode |
+| --- | --- | --- | --- | --- |
+| `tool.launch` | success | `launch` | `POST /api/tools/{id}/launch` minted a launch code (with `tool_id`, `path`) | Best effort (awaited) |
+| `tool.access` | success, or failure on 5xx | `navigation` | Each proxied document navigation (`Sec-Fetch-Mode: navigate`, or no Fetch Metadata), not each asset. Carries `path`, `http_status`, `latency_ms` | Background queue |
+| `tool.request` | success, or failure on 5xx | `write` | Each state-changing (unsafe-method) proxied request, only for tools with registry `audit_writes = true` | Background queue |
+| `tool.denied` | denied | `missing_role` (launch 404, code exchange 404, proxy 403 after a mid-session role revocation), `launch_context` (launch URL not opened from the console iframe), `bad_code` (missing, unknown, used or expired launch code), `misdirected` (421: path for another tool), `identity_header_stripped` (client sent identity headers that were removed; at most once per tool session per minute), `rate_limited` (added when the per-IP denial audit limiter applies) | Denials on the launch API and on tool origins | Background queue (launch API and exchange role denials too, SEC-011); unauthenticated tool-origin denials are rate-bounded per IP |
+| `registry.loaded` | success | `startup` | Once per gateway start after the registry validated | **Fail closed** (boot stops) |
+| `registry.insecure_upstream` | success | `insecure_http_upstream` | At start, once per tool that sets `insecure_http_upstream = true`; the operator's reason is in the log line | **Fail closed** (boot stops) |
+
+Every tool event carries the tool id, `session_ref` when a session is
+known, client IP and request id. Tool upstreams keep their own business
+audit; the console records access and launch (AU-2 split). Launch codes,
+assertions and query strings never appear in records.
+
+Code: `audit::EventType`, `tools_api.rs`, `tool_origin.rs`, `main.rs`
+(registry events), `routes.rs` (callback, `require_session`,
 `keepalive`, `logout`, `csrf_denied`, `login`), `sweeper.rs`.
 
 Tests: `pg_full_flow_and_audit` (login, refresh, logout, 8 CSRF denials),
@@ -76,10 +104,32 @@ queries the table): after the round-1 run the DB held `session.revoked`
 `csrf_token`/`origin`/`rate_limited`, `session.expired.idle` and
 `login.success` `reauthenticated`.
 
-Not audited: `/healthz`, ordinary authenticated requests, 401s for
-requests without a session, and 404s.
+M4 tests: `pg_tool_launch_proxy_and_assertion` (`tool.access`,
+`tool.request`, `identity_header_stripped`), `pg_tool_role_denied`
+(`tool.denied` `missing_role`, 404), `pg_tool_session_lifecycle`
+(`launch_context`), `tool_origin::tests::navigation_audit_classification`,
+`router::forbidden_tool_launch_matches_unknown_id_without_awaiting_db`;
+E2E `tools.spec.ts` (rows for `tool.launch`, `tool.access`, `tool.request`
+with path and `http_status`; `identity_header_stripped`),
+`tools-norole.spec.ts` and `tools.spec.ts` (`missing_role`),
+`tool-isolation.spec.ts` (`launch_context`, 6 or more rows). The
+`registry.*` events have no dedicated automated test; they are written on
+every E2E gateway start (fail-closed path).
+
+Not audited: `/healthz`, ordinary authenticated console requests, proxied
+tool assets (non-navigation GETs), 401s for console requests without a
+session, and console 404s.
 
 ## Example records
+
+M4 tool row (illustrative):
+
+```text
+id=97 occurred_at=2026-11-04 15:02:11+00 event_type=tool.access outcome=success
+user_sub=3f1c2a9e-... username=jdoe session_ref=9a1b2c3d client_ip=198.51.100.7
+reason=navigation tool_id=hello path=/t/hello/headers http_status=200 latency_ms=3
+request_id=Pq2...
+```
 
 Illustrative values (field layout matches the code).
 
@@ -114,6 +164,23 @@ The exact top-level wrapper of the JSON line (`timestamp`, `level`,
   because refusing a logout or a denial would be worse. Marked
   `// POAM: AU-5` in `audit.rs` and `sweeper.rs` (POAM-016). No metric or
   alert is wired to `audit write failed` yet.
+- **Fail closed at startup (M4):** `registry.loaded` and
+  `registry.insecure_upstream`. If the audit DB write fails, the gateway
+  does not start.
+- **Background queue (M4, PERF-002):** `AuditSink::record_background`
+  writes the JSON line synchronously, then `try_send`s the row into a
+  bounded queue (`QUEUE_CAPACITY` 1024). A writer task inserts batches of
+  at most 64 rows (`INSERT ... UNNEST`). If the queue is full or closed
+  the row is dropped and counted (`AuditSink::dropped`). Drop logging is
+  rate-limited (`DropLog`): the first drop is logged at `error` at once,
+  then at most one summary per 10 s with `dropped_since_last_log` and
+  `dropped_total`. Drops suppressed after the last summary appear only in
+  the counter. On shutdown the gateway flushes the queue with a 5 s bound.
+  Used for `tool.access`, `tool.request`, `tool.denied` and rate-bounded
+  unauthenticated denials. Marker `// POAM: AU-5` at `audit.rs:190`. **No
+  metric export or alert for `dropped()` exists yet: required before
+  production (POAM-036).** Test:
+  `audit::tests::drop_log_first_then_rate_limited`.
 
 ## Append-only storage and DB roles (AU-9)
 
@@ -153,7 +220,7 @@ already deleted (POAM-016). Test: `pg_sweeper_deletes_and_audits`.
 
 ## Retention and SIEM export
 
-**Planned.** There is no retention policy, export job or SIEM forwarder in
+**Planned.** M4 adds no export. There is no retention policy, export job or SIEM forwarder in
 this repository. The JSON lines on stdout (`target=audit`) are the
 intended collection point for a log shipper; the deployment must provide
 one. Until then, the `audit_events` table is the system of record.

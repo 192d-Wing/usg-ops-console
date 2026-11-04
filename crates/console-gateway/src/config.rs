@@ -23,6 +23,25 @@ impl Secret {
     }
 }
 
+/// Binary key material that must never be logged or echoed.
+#[derive(Clone)]
+pub struct SecretBytes(Vec<u8>);
+
+impl SecretBytes {
+    pub fn new(value: Vec<u8>) -> Self {
+        Self(value)
+    }
+    pub fn expose(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl fmt::Debug for SecretBytes {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("SecretBytes(<redacted>)")
+    }
+}
+
 impl fmt::Debug for Secret {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("Secret(<redacted>)")
@@ -54,6 +73,11 @@ pub struct Config {
     pub listen: SocketAddr,
     pub dist: String,
     /// Origin-only URL (`scheme://host[:port]`), no trailing slash.
+    ///
+    /// Deployment (SEC-010): put this origin and every registry tool origin
+    /// under a dedicated registrable domain (e.g. `*.console.example.mil`
+    /// on its own eTLD+1 / isolation domain) that hosts nothing else, so
+    /// `Sec-Fetch-Site: same-site` on a launch means "console or a tool".
     pub public_url: Url,
     pub oidc_issuer: String,
     pub oidc_client_id: String,
@@ -76,23 +100,34 @@ pub struct Config {
     pub dev_mode: bool,
     /// Optional; when set, `serve` runs migrations with it at start-up.
     pub migrator_database_url: Option<Secret>,
+    /// Total timeout of the keepalive refresh grant (PERF-008).
+    pub oidc_refresh_timeout: Duration,
+    /// `CONSOLE_TOOLS_REGISTRY_FILE`: (path, contents). `None` = no tools.
+    pub tools_registry: Option<(String, String)>,
+    /// `CONSOLE_ASSERTION_KEY_FILE` contents (PKCS#8 PEM, P-256).
+    pub assertion_key: Option<Secret>,
+    /// `CONSOLE_ASSERTION_PUBLISH_KEYS_FILE` contents (public PEM bundle).
+    pub assertion_publish_keys: Option<String>,
+    /// `CONSOLE_TOOL_SESSION_HMAC_KEY_FILE` key bytes (assertion `sid` key):
+    /// base64 text is decoded, anything else is used as raw bytes. See
+    /// [`decode_hmac_key`].
+    pub tool_sid_key: Option<SecretBytes>,
     /// Non-fatal findings to log once the subscriber is up (never values).
     pub warnings: Vec<String>,
 }
 
 impl Config {
     pub fn from_env() -> Result<Self, ConfigError> {
-        Self::from_lookup(
-            |k| std::env::var(k).ok(),
-            |p| std::fs::read_to_string(p).ok(),
-        )
+        Self::from_lookup(|k| std::env::var(k).ok(), |p| std::fs::read(p).ok())
     }
 
-    /// `env` looks up a variable; `read_file` reads a `*_FILE` path.
+    /// `env` looks up a variable; `read_bytes` reads a `*_FILE` path. Text
+    /// files must be UTF-8; the sid HMAC key file may be binary (F4).
     pub fn from_lookup(
         env: impl Fn(&str) -> Option<String>,
-        read_file: impl Fn(&str) -> Option<String>,
+        read_bytes: impl Fn(&str) -> Option<Vec<u8>>,
     ) -> Result<Self, ConfigError> {
+        let read_file = |p: &str| read_bytes(p).and_then(|b| String::from_utf8(b).ok());
         let get = |k: &str| env(k).filter(|v| !v.trim().is_empty());
         let mut warnings = Vec::new();
         let dev_mode = match get("CONSOLE_DEV_MODE").as_deref().map(str::trim) {
@@ -181,7 +216,21 @@ impl Config {
                     .into(),
             );
         }
-        let db_max_connections = num(&get, "CONSOLE_DB_MAX_CONNECTIONS", 10, 1, 200)?;
+        // F3: default 32 (was 10). Every proxied tool request holds one app
+        // connection for a single indexed lookup (no session cache, so logout
+        // applies on every replica), so pool size caps proxy concurrency.
+        // Budget per replica is 32 + audit 4 = 36; stock Postgres and CNPG
+        // default `max_connections = 100` (3 reserved), which fits two
+        // replicas plus migrator/sweeper headroom. For more replicas raise
+        // `max_connections` or front Postgres with a pooler (CNPG Pooler /
+        // PgBouncer, transaction mode) and size this per replica.
+        let db_max_connections = num(
+            &get,
+            "CONSOLE_DB_MAX_CONNECTIONS",
+            DEFAULT_DB_MAX_CONNECTIONS,
+            1,
+            200,
+        )?;
         let audit_db_max_connections = num(&get, "CONSOLE_AUDIT_DB_MAX_CONNECTIONS", 4, 1, 100)?;
 
         let idle = num(&get, "CONSOLE_SESSION_IDLE_SECS", 900, 60, 3600)?;
@@ -234,6 +283,40 @@ impl Config {
                 .push("CONSOLE_REQUIRED_ACR unset (dev mode): id_token acr is not checked".into());
         }
 
+        let oidc_refresh_timeout = num(&get, "CONSOLE_OIDC_REFRESH_TIMEOUT_SECS", 4, 1, 10)?;
+
+        // M4 tools. The registry path is not secret; its absence means "no
+        // tools", but a configured file that cannot be read fails closed.
+        let tools_registry = match get("CONSOLE_TOOLS_REGISTRY_FILE") {
+            None => {
+                warnings.push("CONSOLE_TOOLS_REGISTRY_FILE unset: no tools are registered".into());
+                None
+            }
+            Some(path) => {
+                let text =
+                    read_file(&path).ok_or(ConfigError::File("CONSOLE_TOOLS_REGISTRY_FILE"))?;
+                Some((path, text))
+            }
+        };
+        let assertion_key = get("CONSOLE_ASSERTION_KEY_FILE")
+            .map(|p| read_secret(&read_file, "CONSOLE_ASSERTION_KEY_FILE", &p))
+            .transpose()?;
+        let assertion_publish_keys = get("CONSOLE_ASSERTION_PUBLISH_KEYS_FILE")
+            .map(|p| read_file(&p).ok_or(ConfigError::File("CONSOLE_ASSERTION_PUBLISH_KEYS_FILE")))
+            .transpose()?;
+        let tool_sid_key = get("CONSOLE_TOOL_SESSION_HMAC_KEY_FILE")
+            .map(|p| {
+                let raw = read_bytes(&p)
+                    .ok_or(ConfigError::File("CONSOLE_TOOL_SESSION_HMAC_KEY_FILE"))?;
+                decode_hmac_key(raw).ok_or_else(|| {
+                    invalid(
+                        "CONSOLE_TOOL_SESSION_HMAC_KEY_FILE",
+                        format!("key must be at least {MIN_HMAC_KEY_BYTES} bytes"),
+                    )
+                })
+            })
+            .transpose()?;
+
         Ok(Self {
             listen,
             dist,
@@ -255,6 +338,11 @@ impl Config {
             required_acr,
             dev_mode,
             migrator_database_url,
+            oidc_refresh_timeout: Duration::from_secs(oidc_refresh_timeout.into()),
+            tools_registry,
+            assertion_key,
+            assertion_publish_keys,
+            tool_sid_key,
             warnings,
         })
     }
@@ -301,7 +389,7 @@ pub fn migrator_url_from_env() -> Result<Secret, ConfigError> {
     Ok(url)
 }
 
-fn is_loopback_host(url: &Url) -> bool {
+pub(crate) fn is_loopback_host(url: &Url) -> bool {
     matches!(url.host_str(), Some("localhost" | "127.0.0.1" | "[::1]"))
 }
 
@@ -350,6 +438,43 @@ fn num<G: Fn(&str) -> Option<String>>(
     } else {
         Err(invalid(key, format!("must be in {min}..={max}")))
     }
+}
+
+/// Default `CONSOLE_DB_MAX_CONNECTIONS` (app pool per replica; F3).
+pub const DEFAULT_DB_MAX_CONNECTIONS: u32 = 32;
+
+/// Minimum HMAC key length (256 bits, matching HMAC-SHA-256 output).
+pub const MIN_HMAC_KEY_BYTES: usize = 32;
+
+/// Decodes HMAC key material read from a file (F4). In order:
+/// 1. UTF-8 text whose trimmed form is standard base64 (padded or not) and
+///    decodes to at least [`MIN_HMAC_KEY_BYTES`] is decoded, e.g.
+///    `openssl rand -base64 48`;
+/// 2. other UTF-8 text is trimmed and used as its bytes (pre-M4 behaviour;
+///    this also keeps a 32-char alphanumeric key, which is valid base64 of
+///    only 24 bytes, working);
+/// 3. non-UTF-8 content is raw binary, used as-is (`head -c 32 /dev/urandom`).
+///
+/// `None` when the resulting key is shorter than [`MIN_HMAC_KEY_BYTES`]
+/// (fail closed).
+// COMPLIANCE MAPPING:
+// - NIST 800-53: SC-12 (Cryptographic Key Establishment and Management) — ≥256-bit sid HMAC key, binary or base64
+pub fn decode_hmac_key(raw: Vec<u8>) -> Option<SecretBytes> {
+    use base64::Engine;
+    use base64::engine::general_purpose::{STANDARD, STANDARD_NO_PAD};
+    let key = match std::str::from_utf8(&raw) {
+        Ok(text) => {
+            let t = text.trim();
+            STANDARD
+                .decode(t)
+                .or_else(|_| STANDARD_NO_PAD.decode(t))
+                .ok()
+                .filter(|k| k.len() >= MIN_HMAC_KEY_BYTES)
+                .unwrap_or_else(|| t.as_bytes().to_vec())
+        }
+        Err(_) => raw,
+    };
+    (key.len() >= MIN_HMAC_KEY_BYTES).then(|| SecretBytes::new(key))
 }
 
 fn read_secret(
@@ -441,7 +566,7 @@ mod tests {
     fn load(env: &HashMap<&'static str, &'static str>) -> Result<Config, ConfigError> {
         Config::from_lookup(
             |k| env.get(k).map(|v| (*v).to_owned()),
-            |p| (p == "/run/secrets/oidc").then(|| "s3cr3t-value\n".to_owned()),
+            |p| (p == "/run/secrets/oidc").then(|| b"s3cr3t-value\n".to_vec()),
         )
     }
 
@@ -450,6 +575,7 @@ mod tests {
         let cfg = load(&base()).unwrap();
         assert_eq!(cfg.session_idle, Duration::from_secs(900));
         assert_eq!(cfg.session_absolute, Duration::from_secs(43_200));
+        assert_eq!(cfg.db_max_connections, 32, "F3 default app pool");
         assert_eq!(cfg.required_role, "console-user");
         assert_eq!(cfg.oidc_client_secret.expose(), "s3cr3t-value");
         assert_eq!(cfg.redirect_url(), "http://localhost:8080/callback");
@@ -505,6 +631,8 @@ mod tests {
             ("CONSOLE_SESSION_ABSOLUTE_SECS", "100000"),
             ("CONSOLE_TRUSTED_PROXIES", "10.0.0.0/8,nope"),
             ("CONSOLE_OIDC_REDIRECT_PATH", "//evil/cb"),
+            ("CONSOLE_OIDC_REFRESH_TIMEOUT_SECS", "0"),
+            ("CONSOLE_OIDC_REFRESH_TIMEOUT_SECS", "11"),
         ];
         for (k, v) in cases {
             let mut env = base();
@@ -590,6 +718,68 @@ mod tests {
         );
         assert!(!cfg.warnings.iter().any(|w| w.contains(":pw@")));
         assert!(cfg.migrator_database_url.is_none());
+    }
+
+    #[test]
+    fn tool_keys_and_registry_files() {
+        let cfg = load(&base()).unwrap();
+        assert_eq!(cfg.oidc_refresh_timeout, Duration::from_secs(4));
+        assert!(cfg.tools_registry.is_none() && cfg.assertion_key.is_none());
+        assert!(cfg.warnings.iter().any(|w| w.contains("no tools")));
+        let files = |p: &str| match p {
+            "/reg.toml" => Some(b"[[tool]]\n".to_vec()),
+            "/key.pem" => Some(b"-----BEGIN PRIVATE KEY-----\n".to_vec()),
+            "/short" => Some(b"too-short".to_vec()),
+            "/short-bin" => Some(vec![0xff; 31]),
+            "/short-b64" => Some(b"QkJCQkJCQkJC\n".to_vec()),
+            "/bin" => Some((0u8..32).map(|i| i.wrapping_mul(97) | 0x80).collect()),
+            "/b64" => {
+                Some(b"QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFB\n".to_vec())
+            }
+            "/run/secrets/oidc" => Some(b"s3cr3t-value".to_vec()),
+            _ => None,
+        };
+        let mut env = base();
+        env.insert("CONSOLE_TOOLS_REGISTRY_FILE", "/reg.toml");
+        env.insert("CONSOLE_ASSERTION_KEY_FILE", "/key.pem");
+        let lookup = |env: &HashMap<&'static str, &'static str>| {
+            Config::from_lookup(|k| env.get(k).map(|v| (*v).to_owned()), files)
+        };
+        let cfg = lookup(&env).unwrap();
+        assert_eq!(cfg.tools_registry.as_ref().unwrap().0, "/reg.toml");
+        assert!(
+            !format!("{cfg:?}").contains("BEGIN PRIVATE"),
+            "key redacted"
+        );
+        env.insert("CONSOLE_TOOLS_REGISTRY_FILE", "/missing.toml");
+        assert_eq!(
+            lookup(&env).unwrap_err(),
+            ConfigError::File("CONSOLE_TOOLS_REGISTRY_FILE"),
+            "a configured but unreadable registry fails closed"
+        );
+        env.insert("CONSOLE_TOOLS_REGISTRY_FILE", "/reg.toml");
+        env.insert("CONSOLE_TOOL_SESSION_HMAC_KEY_FILE", "/short");
+        assert!(matches!(lookup(&env), Err(ConfigError::Invalid { .. })));
+        // F4: binary and base64 key files; short keys fail closed either way.
+        env.insert("CONSOLE_TOOL_SESSION_HMAC_KEY_FILE", "/short-bin");
+        assert!(matches!(lookup(&env), Err(ConfigError::Invalid { .. })));
+        env.insert("CONSOLE_TOOL_SESSION_HMAC_KEY_FILE", "/short-b64");
+        assert!(matches!(lookup(&env), Err(ConfigError::Invalid { .. })));
+        env.insert("CONSOLE_TOOL_SESSION_HMAC_KEY_FILE", "/bin");
+        let cfg = lookup(&env).unwrap();
+        let key = cfg.tool_sid_key.as_ref().unwrap().expose();
+        assert_eq!(key, files("/bin").unwrap().as_slice(), "raw bytes kept");
+        assert!(
+            !format!("{cfg:?}").contains(&format!("{key:?}")),
+            "key redacted"
+        );
+        env.insert("CONSOLE_TOOL_SESSION_HMAC_KEY_FILE", "/b64");
+        let cfg = lookup(&env).unwrap();
+        assert_eq!(
+            cfg.tool_sid_key.unwrap().expose(),
+            &[b'A'; 48][..],
+            "base64 decoded"
+        );
     }
 
     #[test]

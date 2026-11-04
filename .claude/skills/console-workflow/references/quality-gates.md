@@ -29,8 +29,9 @@ budget or run `cargo audit`, so record those separately.
 
 - Shell WASM ≤ 1.5 MB gzip (CI `web` job enforces it). Growth > 10% vs `main`
   is a MAJOR finding unless justified in plan.md.
-- Baseline: 173,207 B gzip (M3 release, 2026-11-03; M2 was 141,918 B). CI `web` job warns above
-  baseline x1.10 (190,527 B) and fails above 1,572,864 B.
+- Baseline: 204,977 B gzip (M4 final, fix round 1, 2026-11-04; +18.3% over M3 accepted by
+  the orchestrator as PERF-001 with trims applied. M3 was 173,207 B, M2 141,918 B). CI `web` job warns above
+  baseline x1.10 (225,474 B) and fails above 1,572,864 B.
 - Release profile keeps `opt-level = "z"`, `lto = true`, `codegen-units = 1`.
 - Chrome renders before any tool fetch; no blocking work on first paint.
 - Gateway proxy streams bodies; no full buffering, no per-request client

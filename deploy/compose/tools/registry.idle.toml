@@ -1,0 +1,17 @@
+# DEV/E2E ONLY tool registry (E2E IDLE gateway, CONSOLE_SESSION_IDLE_SECS=150).
+# Fix round 1, SEC-002/NIST-001: idle-tool.spec.ts mounts the hostile fixture
+# on this gateway and checks that RequestSessionRefresh spam without user input
+# never moves idle_expires_at, so the session still lapses on schedule.
+# ${CONSOLE_*} placeholders are rendered like registry.main.toml. Never deployed.
+
+# Registry schema version (fix round 1, INT-010): any other value fails boot.
+schema = 1
+
+[[tool]]
+id = "evil"
+title = "Evil Tool (E2E)"
+category = "Examples"
+origin = "https://localhost:${CONSOLE_TLS_PORT_TOOL_IDLE}"
+upstream = "http://127.0.0.1:${CONSOLE_PORT_HELLO_UPSTREAM_IDLE}"
+required_roles = ["hello:user"]
+entry = "/"

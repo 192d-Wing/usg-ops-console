@@ -4,18 +4,29 @@
 //! [`session`] (ids, cookies, expiry, store), [`csrf`], [`audit`],
 //! [`client_ip`], [`return_to`], [`routes`] (HTTP surface), [`sweeper`],
 //! [`headers`] (CSP and hardening), [`rate_limit`].
+//! M4 tools: [`registry`] (allow-list, fail closed), [`tool_origin`]
+//! (host-based per-tool origins), [`proxy`] (streaming reverse proxy),
+//! [`assertion`] (ES256 identity assertion), [`jwks`], [`tool_session`]
+//! (launch codes, `__Host-tool_sid`), [`tools_api`] (`/api/tools`, launch).
 
+pub mod assertion;
 pub mod audit;
 pub mod client_ip;
 pub mod config;
 pub mod csrf;
 pub mod headers;
+pub mod jwks;
 pub mod oidc;
+pub mod proxy;
 pub mod rate_limit;
+pub mod registry;
 pub mod return_to;
 pub mod routes;
 pub mod session;
 pub mod sweeper;
+pub mod tool_origin;
+pub mod tool_session;
+pub mod tools_api;
 
 use std::time::Duration;
 
@@ -40,21 +51,40 @@ pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const FALLBACK_CSP: &str = "default-src 'self'; frame-ancestors 'none'; base-uri 'none'";
 
-/// Builds the full router. Everything except `/healthz`, `/login`, the
-/// callback path, `/logged-out` and `/auth.css` sits behind `require_session`.
+/// Builds the full router. A request whose `Host` is a registry tool origin
+/// is served by [`tool_origin::router`]; every other host gets the console
+/// app, where everything except `/healthz`, `/login`, the callback path,
+/// `/logged-out`, `/auth.css`, the JWKS and the `/t`/`/_console` 404s sits
+/// behind `require_session`.
 pub fn app(state: Shared, index_html: &str) -> Router {
+    let tools_router = tool_origin::router(state.clone());
+    console_app(state.clone(), index_html)
+        .layer(from_fn_with_state(
+            (state, tools_router),
+            tool_origin::dispatch,
+        ))
+        .layer(from_fn(strip_identity_headers))
+        // SEC-008: spans carry method + path only; never the query string
+        // (the callback's `code`/`state`, `return_to`, launch `code`).
+        .layer(TraceLayer::new_for_http().make_span_with(request_span))
+}
+
+fn console_app(state: Shared, index_html: &str) -> Router {
     let dist = state.cfg.dist.clone();
     let spa = ServeDir::new(&dist).fallback(ServeFile::new(format!("{dist}/index.html")));
     let issuer_origin = state.cfg.issuer_origin();
     let csp = HeaderValue::from_str(&content_security_policy(
         index_html,
         issuer_origin.as_deref(),
+        &state.tools.origins(),
     ))
     .unwrap_or_else(|_| HeaderValue::from_static(FALLBACK_CSP));
 
     let protected = Router::new()
         .route("/api/session", get(routes::api_session))
         .route("/api/session/keepalive", post(routes::keepalive))
+        .route(console_protocol::tools::ROUTE_TOOLS, get(tools_api::list))
+        .route("/api/tools/{id}/launch", post(tools_api::launch))
         // INT-003: unknown API paths are an honest JSON 404, never the SPA.
         .route("/api", any(routes::api_not_found))
         .route("/api/", any(routes::api_not_found))
@@ -67,7 +97,13 @@ pub fn app(state: Shared, index_html: &str) -> Router {
         .route("/login", get(routes::login))
         .route(&state.cfg.oidc_redirect_path, get(routes::callback))
         .route("/logged-out", get(routes::logged_out))
-        .route("/auth.css", get(routes::auth_css));
+        .route("/auth.css", get(routes::auth_css))
+        .route(console_protocol::tools::ROUTE_JWKS, get(jwks::jwks))
+        .route("/t", any(routes::tool_paths_not_here))
+        .route("/t/", any(routes::tool_paths_not_here))
+        .route("/t/{*rest}", any(routes::tool_paths_not_here))
+        .route("/_console", any(routes::tool_paths_not_here))
+        .route("/_console/{*rest}", any(routes::tool_paths_not_here));
 
     public
         .merge(protected)
@@ -83,14 +119,10 @@ pub fn app(state: Shared, index_html: &str) -> Router {
             header::STRICT_TRANSPORT_SECURITY,
             "max-age=31536000; includeSubDomains",
         ))
-        .layer(from_fn(strip_identity_headers))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
             REQUEST_TIMEOUT,
         ))
-        // SEC-008: spans carry method + path only; never the query string
-        // (the callback's `code`/`state`, `return_to`).
-        .layer(TraceLayer::new_for_http().make_span_with(request_span))
 }
 
 /// Request span without the query string or headers.
@@ -144,6 +176,15 @@ pub async fn migrate(url: &Secret) -> Result<(), String> {
 // - NIST 800-53: SC-5 (Denial of Service Protection) — bounded pool, acquire and statement timeouts
 /// Pool with bounded acquire/statement timeouts. Statement logging is off
 /// so bound values (ids, tokens) never reach logs.
+///
+/// F3 (proxy hot path): `test_before_acquire(false)` drops sqlx's default
+/// liveness ping, which was a second DB round trip on every acquire and so
+/// doubled connection hold time per proxied request. A connection that died
+/// while idle now fails one query (503, the pool discards it) instead;
+/// `idle_timeout` and `max_lifetime` bound how stale an idle connection can
+/// get. Prepared statements are cached per connection (sqlx default
+/// capacity 100, keyed by SQL text), and the hot-path SQL is static, so each
+/// pooled connection prepares it once.
 pub async fn connect_pool(url: &Secret, max: u32) -> Result<PgPool, sqlx::Error> {
     let opts: PgConnectOptions = url.expose().parse()?;
     let opts = opts
@@ -155,6 +196,9 @@ pub async fn connect_pool(url: &Secret, max: u32) -> Result<PgPool, sqlx::Error>
     PgPoolOptions::new()
         .max_connections(max)
         .acquire_timeout(Duration::from_secs(5))
+        .test_before_acquire(false)
+        .idle_timeout(Duration::from_secs(300))
+        .max_lifetime(Duration::from_secs(1800))
         .connect_with(opts)
         .await
 }

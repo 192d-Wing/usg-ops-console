@@ -356,6 +356,10 @@ fn dd_items() -> Vec<DropdownItem> {
             href: "javascript:alert(1)".into(),
             description: None,
         },
+        DropdownItem::Note {
+            id: "n".into(),
+            text: "Nothing else".into(),
+        },
     ]
 }
 
@@ -420,7 +424,10 @@ async fn dropdown_keyboard_and_escape() {
     );
     assert!(!panel.has_attribute("hidden"));
     let items = panel.query_selector_all(".cui-dropdown__item").unwrap();
-    assert_eq!(items.length(), 3);
+    assert_eq!(items.length(), 3, "Note is not an interactive item");
+    let note = q(&host, "[data-testid=dd-item-n]");
+    assert_eq!(note.tag_name(), "SPAN");
+    assert!(!note.has_attribute("tabindex"));
     let item = |i| items.item(i).unwrap().unchecked_into::<Element>();
     assert_eq!(active(), Some(item(0)), "first item focused on open");
     // Unsafe href sanitised.

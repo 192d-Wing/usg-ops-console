@@ -6,10 +6,25 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+default = []
+# Browser postMessage transport + Yew hooks (wasm32 tools). The native
+# codec needs no feature.
+web = ["dep:yew", "dep:web-sys", "dep:wasm-bindgen", "dep:js-sys", "dep:wasm-bindgen-futures"]
+
 [dependencies]
 console-protocol.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+yew = { workspace = true, optional = true }
+web-sys = { workspace = true, optional = true, features = ["Window", "Document", "Element", "HtmlElement", "Location", "EventTarget", "MessageEvent", "KeyboardEvent", "NodeList", "DomRectList", "Request", "RequestInit", "RequestCredentials", "Response", "Headers", "console"] }
+wasm-bindgen = { workspace = true, optional = true }
+js-sys = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test.workspace = true
+web-sys = { workspace = true, features = ["MessageEventInit", "HtmlIFrameElement", "KeyboardEventInit"] }
 
 [lints]
 workspace = true

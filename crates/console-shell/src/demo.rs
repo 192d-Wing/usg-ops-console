@@ -1,62 +1,6 @@
-//! Static demo data for M2: service registry, scope hierarchy and user.
-//! M4 replaces this with the gateway registry behind the same accessors.
+//! Static demo data: scope hierarchy. The service list moved to the gateway
+//! registry (`/api/tools`, M4; POAM-010).
 //! Nothing here is an authorization decision (plan section 5).
-
-/// One entry in the service menu.
-pub struct DemoService {
-    pub id: &'static str,
-    pub title: &'static str,
-    pub category: &'static str,
-    pub href: &'static str,
-    pub description: &'static str,
-}
-
-// POAM: AC-3/AC-6 - service list is static and unfiltered; server-side role filtering arrives with the M4 registry.
-/// Placeholder tool links route to the shell's NotFound page in M2.
-pub const SERVICES: &[DemoService] = &[
-    DemoService {
-        id: "home",
-        title: "Console home",
-        category: "Console",
-        href: "/",
-        description: "Overview of the console",
-    },
-    DemoService {
-        id: "inventory",
-        title: "Inventory",
-        category: "Operations",
-        href: "/t/inventory/",
-        description: "Hosts and assets",
-    },
-    DemoService {
-        id: "incidents",
-        title: "Incidents",
-        category: "Operations",
-        href: "/t/incidents/",
-        description: "Open and recent incidents",
-    },
-    DemoService {
-        id: "metrics",
-        title: "Metrics",
-        category: "Monitoring",
-        href: "/t/metrics/",
-        description: "Dashboards and alarms",
-    },
-    DemoService {
-        id: "logs",
-        title: "Logs",
-        category: "Monitoring",
-        href: "/t/logs/",
-        description: "Search application logs",
-    },
-    DemoService {
-        id: "audit",
-        title: "Audit trail",
-        category: "Security",
-        href: "/t/audit/",
-        description: "Who did what, when",
-    },
-];
 
 /// A tenant as offered at one site, with the environments it has there.
 pub struct Tenant {
@@ -140,12 +84,6 @@ mod tests {
 
     #[test]
     fn ids_pass_charset_and_are_unique() {
-        let mut svc = HashSet::new();
-        for s in SERVICES {
-            assert!(valid_charset(s.id), "{}", s.id);
-            assert!(svc.insert(s.id), "dup service {}", s.id);
-            assert!(s.href.starts_with('/') && !s.href.starts_with("//"));
-        }
         let mut sites = HashSet::new();
         for s in SITES {
             assert!(valid_charset(s.id), "{}", s.id);

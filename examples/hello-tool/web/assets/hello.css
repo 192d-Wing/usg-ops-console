@@ -1,0 +1,88 @@
+/* hello-tool styles: tokens only (console-ui tokens.css), light/dark via
+ * data-theme set by the SDK, single column below 40rem. */
+body {
+  margin: 0;
+  font-family: var(--cui-font-family);
+  font-size: var(--cui-font-size-m);
+  line-height: var(--cui-font-line-height);
+  color: var(--cui-color-text);
+  background: var(--cui-color-bg);
+}
+.hello {
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-m);
+  padding: var(--cui-space-l);
+  max-width: 64rem;
+}
+.hello-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--cui-space-m);
+}
+.hello-nav__link {
+  color: var(--cui-color-accent-text);
+  min-height: var(--cui-size-target-min);
+}
+.hello-nav__link[aria-current="page"] {
+  font-weight: var(--cui-font-weight-bold);
+}
+.hello-nav__link:focus-visible,
+.hello a:focus-visible {
+  outline: var(--cui-border-width-m) solid var(--cui-color-focus);
+  outline-offset: var(--cui-space-xxs);
+}
+.hello-kv {
+  display: grid;
+  grid-template-columns: minmax(10rem, max-content) 1fr;
+  gap: var(--cui-space-xs) var(--cui-space-m);
+  margin: 0;
+}
+.hello-kv dt {
+  font-weight: var(--cui-font-weight-bold);
+}
+.hello-kv dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.hello-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--cui-space-s);
+}
+.hello-mono {
+  font-family: var(--cui-font-family-mono);
+  font-size: var(--cui-font-size-s);
+}
+.hello-wrap {
+  overflow-wrap: anywhere;
+}
+.evil-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--cui-space-s);
+}
+.evil-item {
+  display: grid;
+  grid-template-columns: minmax(16rem, max-content) 1fr;
+  gap: var(--cui-space-s);
+  align-items: center;
+}
+.evil-sink {
+  width: 0;
+  height: 0;
+  border: 0;
+}
+@media (max-width: 40rem) {
+  .hello {
+    padding: var(--cui-space-s);
+  }
+  .hello-kv,
+  .evil-item {
+    grid-template-columns: 1fr;
+  }
+}

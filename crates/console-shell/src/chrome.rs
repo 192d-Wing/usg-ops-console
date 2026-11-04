@@ -2,7 +2,7 @@
 //! global search, user menu and the cascading scope picker.
 
 use crate::ctx::{ScopeCtx, SessionCtx};
-use crate::demo::{self, SERVICES, SITES};
+use crate::demo::{self, SITES};
 use crate::scope::{self, find_site, find_tenant};
 use console_ui::{
     AlertKind, Dropdown, DropdownItem, FieldIds, FormField, OnFollow, SearchInput, Select,
@@ -14,41 +14,32 @@ use yew::prelude::*;
 
 type Flash = Callback<(AlertKind, AttrValue)>;
 
-fn service_items() -> Vec<DropdownItem> {
-    let mut cats: Vec<&'static str> = Vec::new();
-    for s in SERVICES {
-        if !cats.contains(&s.category) {
-            cats.push(s.category);
-        }
-    }
-    cats.into_iter()
-        .map(|c| DropdownItem::Group {
-            text: AttrValue::Static(c),
-            items: SERVICES
-                .iter()
-                .filter(|s| s.category == c)
-                .map(|s| DropdownItem::Link {
-                    id: AttrValue::Static(s.id),
-                    text: AttrValue::Static(s.title),
-                    href: AttrValue::Static(s.href),
-                    description: Some(AttrValue::Static(s.description)),
-                })
-                .collect(),
-        })
-        .collect()
-}
-
 #[derive(Properties, PartialEq)]
 pub struct ServiceMenuProps {
     pub onfollow: OnFollow,
 }
 
-/// Tool switcher (demo registry in M2; real, server-filtered registry in M4).
+/// Tool switcher from `/api/tools` (already role-filtered by the gateway;
+/// POAM-010). Shows loading, empty and retry states.
 #[function_component]
 pub fn ServiceMenu(p: &ServiceMenuProps) -> Html {
-    let items = use_memo((), |_| service_items());
+    let tools = use_context::<crate::tools::ToolsCtx>();
+    let state = tools
+        .as_ref()
+        .map_or(crate::tools::ToolsState::Loading, |t| t.state.clone());
+    let items = use_memo(state, crate::tools::service_items);
+    let on_action = {
+        let reload = tools.map(|t| t.reload);
+        Callback::from(move |id: AttrValue| {
+            if id == crate::tools::RETRY_ACTION
+                && let Some(r) = &reload
+            {
+                r.emit(());
+            }
+        })
+    };
     html! {
-        <Dropdown label="Services" items={(*items).clone()}
+        <Dropdown label="Services" items={(*items).clone()} {on_action}
             onfollow={Some(p.onfollow.clone())} test_id="service-menu" />
     }
 }

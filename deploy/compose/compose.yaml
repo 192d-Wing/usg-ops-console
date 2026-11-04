@@ -1,4 +1,4 @@
-# Local dev / E2E stack for usg-ops-console (M3). DEV ONLY - never deploy.
+# Local dev / E2E stack for usg-ops-console (M3/M4). DEV ONLY - never deploy.
 #
 #   make up        postgres + keycloak + tls-proxy (default)
 #   make run       gateway on the host behind https://localhost:$CONSOLE_TLS_PORT_RUN
@@ -68,6 +68,8 @@ services:
       CONSOLE_TLS_PORT_DIST: ${CONSOLE_TLS_PORT_DIST:?use --env-file deploy/compose/ports.env}
       CONSOLE_TLS_PORT_IDLE: ${CONSOLE_TLS_PORT_IDLE:?use --env-file deploy/compose/ports.env}
       CONSOLE_TLS_PORT_ACR: ${CONSOLE_TLS_PORT_ACR:?use --env-file deploy/compose/ports.env}
+      CONSOLE_TLS_PORT_KA503: ${CONSOLE_TLS_PORT_KA503:?use --env-file deploy/compose/ports.env}
+      CONSOLE_TLS_PORT_PRODLIKE: ${CONSOLE_TLS_PORT_PRODLIKE:?use --env-file deploy/compose/ports.env}
     volumes:
       - ./keycloak/realm-dev.json:/opt/keycloak/data/import/realm-dev.json:ro,Z
     ports:
@@ -96,6 +98,14 @@ services:
       CONSOLE_GW_PORT_IDLE: ${CONSOLE_GW_PORT_IDLE:?use --env-file deploy/compose/ports.env}
       CONSOLE_TLS_PORT_ACR: ${CONSOLE_TLS_PORT_ACR:?use --env-file deploy/compose/ports.env}
       CONSOLE_GW_PORT_ACR: ${CONSOLE_GW_PORT_ACR:?use --env-file deploy/compose/ports.env}
+      CONSOLE_TLS_PORT_KA503: ${CONSOLE_TLS_PORT_KA503:?use --env-file deploy/compose/ports.env}
+      CONSOLE_GW_PORT_KA503: ${CONSOLE_GW_PORT_KA503:?use --env-file deploy/compose/ports.env}
+      CONSOLE_TLS_PORT_TOOL_HELLO: ${CONSOLE_TLS_PORT_TOOL_HELLO:?use --env-file deploy/compose/ports.env}
+      CONSOLE_TLS_PORT_TOOL_EVIL: ${CONSOLE_TLS_PORT_TOOL_EVIL:?use --env-file deploy/compose/ports.env}
+      CONSOLE_TLS_PORT_TOOL_RUN: ${CONSOLE_TLS_PORT_TOOL_RUN:?use --env-file deploy/compose/ports.env}
+      CONSOLE_TLS_PORT_TOOL_IDLE: ${CONSOLE_TLS_PORT_TOOL_IDLE:?use --env-file deploy/compose/ports.env}
+      CONSOLE_TLS_PORT_PRODLIKE: ${CONSOLE_TLS_PORT_PRODLIKE:?use --env-file deploy/compose/ports.env}
+      CONSOLE_GW_PORT_PRODLIKE: ${CONSOLE_GW_PORT_PRODLIKE:?use --env-file deploy/compose/ports.env}
     extra_hosts:
       - "host.containers.internal:host-gateway"
     volumes:
@@ -108,6 +118,12 @@ services:
       - "127.0.0.1:${CONSOLE_TLS_PORT_DIST}:${CONSOLE_TLS_PORT_DIST}"   # e2e release dist smoke
       - "127.0.0.1:${CONSOLE_TLS_PORT_IDLE}:${CONSOLE_TLS_PORT_IDLE}"   # e2e idle (short idle)
       - "127.0.0.1:${CONSOLE_TLS_PORT_ACR}:${CONSOLE_TLS_PORT_ACR}"     # e2e acr-mismatch gateway
+      - "127.0.0.1:${CONSOLE_TLS_PORT_KA503}:${CONSOLE_TLS_PORT_KA503}"     # e2e keepalive-503 gateway
+      - "127.0.0.1:${CONSOLE_TLS_PORT_TOOL_HELLO}:${CONSOLE_TLS_PORT_TOOL_HELLO}"     # tool origin hello (main gateway)
+      - "127.0.0.1:${CONSOLE_TLS_PORT_TOOL_EVIL}:${CONSOLE_TLS_PORT_TOOL_EVIL}"     # tool origin evil (main gateway)
+      - "127.0.0.1:${CONSOLE_TLS_PORT_TOOL_RUN}:${CONSOLE_TLS_PORT_TOOL_RUN}"     # tool origin hello (make run)
+      - "127.0.0.1:${CONSOLE_TLS_PORT_TOOL_IDLE}:${CONSOLE_TLS_PORT_TOOL_IDLE}"     # tool origin evil (idle gateway)
+      - "127.0.0.1:${CONSOLE_TLS_PORT_PRODLIKE}:${CONSOLE_TLS_PORT_PRODLIKE}"     # prodlike *.ops.test (CI)
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 $$CONSOLE_TLS_PORT_MAIN"]
       interval: 2s

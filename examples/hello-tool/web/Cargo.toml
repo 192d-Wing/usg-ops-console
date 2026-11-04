@@ -1,0 +1,25 @@
+[package]
+name = "hello-tool-web"
+description = "Example console tool UI (Yew/WASM) using console-sdk hooks; also the hostile 'evil' fixture."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+console-protocol.workspace = true
+console-sdk = { workspace = true, features = ["web"] }
+console-ui.workspace = true
+yew.workspace = true
+serde_json.workspace = true
+js-sys.workspace = true
+wasm-bindgen.workspace = true
+wasm-bindgen-futures.workspace = true
+web-sys = { workspace = true, features = [
+  "Window", "Document", "Element", "HtmlElement", "HtmlFormElement", "HtmlInputElement",
+  "Location", "Storage", "Request", "RequestInit", "RequestCredentials", "RequestMode",
+  "Response", "ResponseType", "Headers", "History", "MessageEvent",
+] }
+
+[lints]
+workspace = true

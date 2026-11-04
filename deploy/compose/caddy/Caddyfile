@@ -36,3 +36,27 @@ https://localhost:{$CONSOLE_TLS_PORT_IDLE} {
 https://localhost:{$CONSOLE_TLS_PORT_ACR} {
 	import gw {$CONSOLE_GW_PORT_ACR}
 }
+https://localhost:{$CONSOLE_TLS_PORT_KA503} {
+	import gw {$CONSOLE_GW_PORT_KA503}
+}
+
+# M4 tool origins (plan §0). Each tool origin is its own browser origin and is
+# served by the SAME gateway as its console (Host routing incl. port; Caddy
+# passes Host unchanged). Tools never talk to Keycloak.
+https://localhost:{$CONSOLE_TLS_PORT_TOOL_HELLO}, https://localhost:{$CONSOLE_TLS_PORT_TOOL_EVIL} {
+	import gw {$CONSOLE_GW_PORT_MAIN}
+}
+https://localhost:{$CONSOLE_TLS_PORT_TOOL_RUN} {
+	import gw {$CONSOLE_GW_PORT_RUN}
+}
+# evil tool origin of the IDLE gateway (idle-tool.spec.ts, SEC-002).
+https://localhost:{$CONSOLE_TLS_PORT_TOOL_IDLE} {
+	import gw {$CONSOLE_GW_PORT_IDLE}
+}
+
+# prodlike (CI only; needs /etc/hosts entries for these names -> 127.0.0.1).
+# Distinct hosts on one port: tests cookie-tossing resistance and the same-site
+# tool cookie inside the iframe, which port-distinct localhost origins cannot.
+https://console.ops.test:{$CONSOLE_TLS_PORT_PRODLIKE}, https://hello.tools.ops.test:{$CONSOLE_TLS_PORT_PRODLIKE}, https://evil.tools.ops.test:{$CONSOLE_TLS_PORT_PRODLIKE} {
+	import gw {$CONSOLE_GW_PORT_PRODLIKE}
+}

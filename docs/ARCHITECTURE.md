@@ -1,25 +1,31 @@
-# Architecture (current state, M3)
+# Architecture (current state, M4)
 
 This describes what is built today. The target design and the milestones are
 in [PLAN.md](PLAN.md). M3 added Keycloak OIDC sign-in, server-side
-sessions, logout, idle and absolute timeouts, and the audit log. The tool
-registry, the reverse proxy and the iframe tool container are **not built
-yet** (M4).
+sessions, logout, idle and absolute timeouts, and the audit log. M4 added
+tool hosting: the gateway tool registry, per-tool origins with a
+launch-code handoff, the authenticated reverse proxy, the signed identity
+assertion with a JWKS, the shell tool container, SDK protocol v1 with the
+`console-sdk` transport, and `examples/hello-tool`. The tool contract is in
+[INTEGRATING-A-TOOL.md](INTEGRATING-A-TOOL.md). M4 has not run in CI yet
+(pending push).
 
 ## Crates
 
 | Crate | What it does today |
 | --- | --- |
-| `console-protocol` | Serde types for the tool manifest, shell/tool SDK messages, and (M3) the gateway session HTTP shapes (`session::SessionInfo`, `AuthErrorBody`, `LogoutResponse`). |
-| `console-sdk` | Tool-side encode/decode with origin checks. No transport yet (M4). |
+| `console-protocol` | Serde types for the tool manifest, SDK v1 messages (`message`), the gateway session HTTP shapes (`session`), and (M4) the tool-hosting contract (`tools`: `/api/tools`, launch, `/_console/context`, assertion claims, header and route names). Frozen fixtures in `tests/fixtures/sdk_v1/` and `tools_v1/`. |
+| `console-sdk` | Tool-side bridge: `codec` (exact-origin encode/decode, native) and, with feature `web`, the browser `postMessage` transport and Yew hooks (M4). |
 | `console-ui` | Yew 0.23 component library, design tokens (`tokens.css`) and component styles (`components.css`). See [crates/console-ui/README.md](../crates/console-ui/README.md). |
 | `console-shell` | Yew CSR app built with Trunk: skip link, top navigation (service menu, global search, user menu, theme toggle), scope picker, page header and breadcrumbs, flashbar, collapsible side navigation, router, and an optional component gallery. |
-| `console-gateway` | axum server: OIDC sign-in, server-side sessions (Postgres), logout, audit log, security headers, and the shell's static `dist` behind the session check. |
+| `console-gateway` | axum server: OIDC sign-in, server-side sessions (Postgres), logout, audit log, security headers, the shell's static `dist` behind the session check, and (M4) the tool registry, tool origins, reverse proxy and identity assertion. |
+| `examples/hello-tool/*` | `hello-tool-server` (axum: assertion verifier, API, serves the web build) and `hello-tool-web` (Yew tool using the SDK, plus the hostile `evil` fixture). Template and E2E target. |
 
 ## console-shell
 
-- Routing: `yew-router` `BrowserRouter` with `Home` (`/`), `NotFound`, and
-  `Gallery` (`/gallery`). `Gallery` exists only when the `gallery` Cargo
+- Routing: `yew-router` `BrowserRouter` with `Home` (`/`), `NotFound`,
+  (M4) `/tools/:id` and `/tools/:id/*path` (tool container, deep links),
+  and `Gallery` (`/gallery`). `Gallery` exists only when the `gallery` Cargo
   feature is on. The feature is off by default (CM-7).
 - On a route change the shell sets `document.title` to
   `<page> - USG Ops Console` and moves focus to `#main-content`. It does not
@@ -37,11 +43,12 @@ yet** (M4).
 
 ### Chrome (`src/chrome.rs`, `src/demo.rs`)
 
-- `TopNavigation` banner with `ServiceMenu` (a disclosure `Dropdown` of the
-  static `SERVICES` demo list, 6 entries in 4 categories), `GlobalSearch`,
-  `UserMenu` and the theme toggle.
-- `ServiceMenu` is unfiltered demo data. It is not access control
-  (POAM-010; role filtering comes from the M4 registry).
+- `TopNavigation` banner with `ServiceMenu`, `GlobalSearch`, `UserMenu`
+  and the theme toggle.
+- `ServiceMenu` (M4) lists the tools from `GET /api/tools`, which the
+  gateway filters by role (POAM-010 closed), grouped by category, with
+  loading, empty (non-interactive notes) and Retry states. The side
+  navigation gets a "Tools" section with the active tool's nav entries.
 - `UserMenu` shows the signed-in user's `display_name` from `/api/session`
   ("Signed in as `<username>`") and a working Sign out (POST `/logout` with
   the CSRF token). While loading it shows a skeleton; if `/api/session`
@@ -115,7 +122,8 @@ History semantics:
 - Scope is never stored in `localStorage`.
 
 Scope is a UI filter, not an authorization claim (PL-8). Servers must not
-trust it; M4 must re-authorize scope on the server.
+trust it. M4 passes it to tools as the assertion `ctx` claim (a
+selection, not authorization); tools must authorize it.
 
 ### Session (`src/session.rs`, `src/api.rs`, `src/idle.rs`)
 
@@ -132,6 +140,41 @@ trust it; M4 must re-authorize scope on the server.
 - Sign out follows the gateway's `redirect` only to `end_session_origin`
   or the console's own `/logged-out`.
 
+### Tool container (M4: `src/tools.rs`, `src/tool_host.rs`, `src/tool_wire.rs`, `src/activity.rs`)
+
+- `tools.rs` fetches `/api/tools` once the session is ready and provides
+  `ToolsCtx`. `accept_tool` re-checks each entry defensively (valid id,
+  exact `https://` origin that is not the console origin, cleaned titles,
+  safe nav paths).
+- `ToolHost` (keyed by tool id): `POST /api/tools/{id}/launch {path}`,
+  accept the URL only as `<registry origin>/_console/launch?...`, set the
+  iframe `src`. Sandbox `allow-scripts allow-same-origin allow-forms
+  allow-downloads allow-popups allow-modals`, `allow=""`,
+  `referrerpolicy="no-referrer"`, `title` = tool title. Scope and theme
+  changes are sent as messages, never by reloading the frame. 404 (unknown
+  or not permitted) shows "Tool not found"; other errors show an alert
+  with "Reload tool". No `Ready` within 10 s shows a non-blocking warning.
+- Inbound messages are accepted only if `origin` equals the registry
+  origin and `source` is the iframe's window, then size-capped and
+  decoded by `tool_wire` (a `JSON`/`Reflect` codec that mirrors the serde
+  codec, tested against every frozen fixture, so `serde_json` stays out of
+  the bundle). Outbound messages target the registry origin.
+- `activity.rs` gates tool `RequestSessionRefresh` on trusted user
+  presence (60 s window) or an open idle dialog (see
+  [SESSION_MANAGEMENT.md](compliance/SESSION_MANAGEMENT.md#tool-refresh-gating)).
+- Keyboard: "Skip to tool content", F6/Ctrl+F6/Shift+F6, focus edges after
+  native Tab into the frame, a state-driven focus ring for the Firefox
+  reverse-Tab stop ([compliance/ACCESSIBILITY.md](compliance/ACCESSIBILITY.md)).
+
+### console-sdk (feature `web`)
+
+`ConsoleBridge::connect()` fetches `/_console/context` to pin the console
+origin, sends `Ready` (retries at 250 ms, 500 ms, 1 s; `Standalone` after
+2 s or when top-level), accepts only messages from the pinned origin whose
+`source` is `window.parent`, handles F6 keys and `Focus` edges, and offers
+`console_fetch` (adds `X-Console-Scope`) and Yew hooks. Details:
+[INTEGRATING-A-TOOL.md](INTEGRATING-A-TOOL.md#sdk-protocol-v1-postmessage).
+
 ## console-gateway
 
 The gateway is the authenticated front door: Keycloak OIDC sign-in,
@@ -141,7 +184,13 @@ fail closed), `oidc` (discovery, authorize URL, code exchange, id_token
 verification, refresh grant, end-session URL), `session` (ids, cookies,
 expiry math, `SessionStore`), `routes` (handlers and `require_session`),
 `csrf`, `return_to`, `client_ip`, `headers`, `rate_limit`, `audit`,
-`sweeper`. Session and cookie rules: [compliance/SESSION_MANAGEMENT.md](compliance/SESSION_MANAGEMENT.md).
+`sweeper`; M4 adds `registry` (TOML load and validation, `ToolsState`),
+`tool_origin` (Host dispatch, launch exchange, `/_console/context`, proxy
+handler, tool-origin hardening headers), `proxy` (hyper client per tool,
+header allow-list, cookie and `Location` rules, streaming bodies),
+`assertion` (ES256 signing with `ring`, JWKS, `sid` HMAC), `tool_session`
+(launch codes, tool sessions), `tools_api` (`/api/tools`, launch) and
+`jwks`. Session and cookie rules: [compliance/SESSION_MANAGEMENT.md](compliance/SESSION_MANAGEMENT.md).
 Audit events: [compliance/AUDIT_LOGGING.md](compliance/AUDIT_LOGGING.md).
 
 The binary has two subcommands: `console-gateway` / `console-gateway serve`
@@ -195,6 +244,69 @@ Denials: no required role gives 403 "Not authorized"; an `acr` that is not
 in `CONSOLE_REQUIRED_ACR` gives 403 "CAC/PIV sign-in required"; neither
 creates a session. Both are audited as `login.denied`.
 
+### Tool hosting (M4)
+
+```text
+                      +-------------------- console-gateway ---------------------+
+ console.<domain> --> | console app: /api/*, /login, SPA, /.well-known/jwks.json  |
+                      |   /t/* and /_console/* -> 404                            |
+ <id>.tools.<domain>->| tool origin router (Host match against the registry):    |
+                      |   /_console/launch?code=  launch-code exchange           |
+                      |   /_console/context       SDK origin pin                 |
+                      |   /t/<id>/*  tool session -> console session check ->    |
+                      |              role check -> header rebuild -> sign -> proxy --> tool upstream
+                      +----------------------------------------------------------+
+```
+
+- **Registry**: `CONSOLE_TOOLS_REGISTRY_FILE`, validated at startup, fail
+  closed ([DEPLOYMENT.md](DEPLOYMENT.md#tool-registry)).
+- **Tool origins**: each tool has its own origin; the outer `dispatch`
+  layer routes on `Host`. An unknown `Host` is the console app; another
+  tool's path on a tool origin is 421.
+- **Launch handoff**: the shell calls `POST /api/tools/{id}/launch`
+  (session, CSRF, Origin, 60/min); the gateway stores a single-use 30 s
+  code and returns the tool-origin launch URL. The tool origin checks the
+  launch context (iframe Fetch Metadata or console `Referer`), takes the
+  code, creates a tool session (at most 8 per console session and tool),
+  sets `__Host-tool_sid` and redirects 303 to `/t/<id><path>`.
+- **Proxy**: per-tool pooled hyper client over hyper-rustls (`ring`),
+  http/1.1 and h2; connect 3 s, per-tool header timeout, 60 s body idle;
+  streaming both ways with a body cap; per-tool concurrency semaphore;
+  allow-list request headers; `Set-Cookie`, hop-by-hop, HSTS and `server`
+  filtering; `Location` restricted; gateway CSP `frame-ancestors <console>`
+  added; WebSocket upgrades get 501.
+- **Assertion and JWKS**: a fresh ES256 JWS per request in
+  `X-Console-Assertion` (60 s, unique `jti`, per-tool `sid`), signed after
+  authorization; not cached (sign p50 is about 23 µs in the bench). Public
+  keys at `/.well-known/jwks.json`.
+- **Tool sessions**: one indexed join per proxied request; console idle
+  and absolute deadlines and roles rechecked, never extended; no session
+  cache (M3 Q7 decision kept). Rows cascade with the console session.
+- **Audit queue**: proxy-path audit rows go through a bounded background
+  queue (1024, batches of 64); drops are counted
+  ([AUDIT_LOGGING.md](compliance/AUDIT_LOGGING.md)).
+
+Proxy overhead (QA final round, loopback, n=5000, p50 / p99 ms; gateway
+minus direct hello). **Caveat:** gateway, hello, load generator and the
+podman VM shared one host (load average 27.4 on 12 cores), which inflates
+the c>=32 tails; re-measure on separate hosts before acting (POAM-043).
+
+| Case | Direct | Via gateway | Overhead |
+| --- | --- | --- | --- |
+| ping c=1 | 0.52 / 1.11 | 1.04 / 1.64 | 0.52 / 0.53 |
+| ping c=32 | 2.04 / 12.20 | 4.03 / 18.45 | 1.99 / 6.26 |
+| ping c=128 | 9.98 / 30.45 | 18.88 / 46.88 | 8.90 / 16.43 |
+| navigation c=1 | 0.56 / 1.45 | 1.07 / 1.81 | 0.51 / 0.35 |
+| navigation c=32 | 2.04 / 5.79 | 4.40 / 10.81 | 2.36 / 5.02 |
+| POST (`audit_writes`) c=1 | 0.53 / 0.64 | 1.01 / 1.36 | 0.48 / 0.72 |
+| POST c=32 | 1.83 / 4.06 | 4.11 / 9.08 | 2.28 / 5.02 |
+
+Target: overhead p50 <= 2 ms and p99 <= 5 ms. Met at c=1; at c=32 missed
+for ping p99 (6.26 ms) and borderline for navigation and POST (5.02 ms);
+c=128 is pool-bound by design (pool 32). Tail overhead p99 is computed as
+the difference of two p99 values, so it can be smaller than p50.
+`assertion.sign` p99 stayed at or below 174 µs at c<=32.
+
 ### Gateway HTTP contract
 
 Public routes (no session): `GET /healthz`, `GET /login`,
@@ -207,6 +319,10 @@ Public routes (no session): `GET /healthz`, `GET /login`,
 | `GET /api/session` | 200 `SessionInfo` (`console_protocol::session`): `user {id, username, display_name}`, `roles`, `idle_expires_at`, `absolute_expires_at`, `idle_timeout_secs`, `server_time`, `csrf_token` | Does not extend the session |
 | `POST /api/session/keepalive` | 200 `SessionInfo` | Requires `X-CSRF-Token` and a same-origin `Origin`. Performs an IdP refresh grant. 401 `revoked` if the IdP or roles say no; 503 `unavailable` if the IdP is unreachable (not extended) |
 | `POST /logout` | XHR (has `X-CSRF-Token`, or `Accept` contains `application/json`): 200 `LogoutResponse {redirect, end_session_origin?}`. Otherwise 303 to `redirect` | CSRF token as header or `csrf` form field (body at most 4 KB). `GET /logout` does not sign out |
+| `GET /api/tools` (M4) | 200 `ToolsResponse` filtered by role, `no-store` | No upstreams in the response |
+| `POST /api/tools/{id}/launch` (M4) | 200 `LaunchResponse {url}` | CSRF + Origin; 404 for unknown or not-permitted ids; 400 `bad_request`; 429 over 60/min |
+| `GET /.well-known/jwks.json` (M4) | 200 JWKS, `public, max-age=300` | Public |
+| `/t/*`, `/_console/*` on the console origin (M4) | 404 | Never proxied |
 | `/api`, `/api/`, `/api/*` (unknown) | 404 `{"error":"not_found"}` | After the session check |
 | any other path | SPA static file or `index.html` | |
 
@@ -233,12 +349,17 @@ Every response gets:
 
 - `Content-Security-Policy`: `default-src 'self'`, `script-src 'self'
   'wasm-unsafe-eval'` plus a SHA-256 hash of each inline script in
-  `index.html` (computed at startup), `style-src 'self'`, `frame-src 'self'`,
+  `index.html` (computed at startup), `style-src 'self'`, `frame-src`
+  = the registry tool origins (`'none'` with no tools; M4),
   `frame-ancestors 'none'`, `base-uri 'none'`, `form-action 'self'
   <issuer origin>`
 - `X-Content-Type-Options: nosniff`
 - `Referrer-Policy: no-referrer`
 - `Strict-Transport-Security: max-age=31536000; includeSubDomains`
+
+Tool-origin responses and errors are listed in
+[INTEGRATING-A-TOOL.md](INTEGRATING-A-TOOL.md#errors) (400, 401, 403,
+404, 413, 421, 429, 501, 502, 503, 504).
 
 Requests time out after 30 s. Client-supplied `x-console-user`,
 `x-console-roles`, `x-console-session` and `x-forwarded-user` headers are
@@ -263,7 +384,7 @@ invalid value stops startup with the key name (never the value).
 | `CONSOLE_DATABASE_URL[_FILE]` | required | Runtime role (`console`, member of `console_app`) |
 | `CONSOLE_AUDIT_DATABASE_URL[_FILE]` | required | Audit writer (`console_audit`) |
 | `CONSOLE_MIGRATOR_DATABASE_URL[_FILE]` | unset | Migrator (`console_migrator`). Required by `migrate`. If set for `serve`, it migrates at startup (dev only; logs a warning) |
-| `CONSOLE_DB_MAX_CONNECTIONS` | `10` | Main pool size (1-200) |
+| `CONSOLE_DB_MAX_CONNECTIONS` | `32` (M4; was 10) | Main pool size (1-200). No ping before acquire; idle 300 s, lifetime 30 min |
 | `CONSOLE_AUDIT_DB_MAX_CONNECTIONS` | `4` | Audit pool size (1-100) |
 | `CONSOLE_SESSION_IDLE_SECS` | `900` | Idle timeout (60-3600, less than absolute) |
 | `CONSOLE_SESSION_ABSOLUTE_SECS` | `43200` | Absolute lifetime (900-86400) |
@@ -272,6 +393,11 @@ invalid value stops startup with the key name (never the value).
 | `CONSOLE_REQUIRED_ROLE` | `console-user` | Realm role required for a session |
 | `CONSOLE_REQUIRED_ACR` | required unless dev mode | Comma-separated accepted `acr` values; sent as `acr_values` |
 | `CONSOLE_DEV_MODE` | `false` | `true`/`1` relaxes two checks: `CONSOLE_REQUIRED_ACR` may be unset, and non-loopback DB hosts may omit `sslmode=verify-full`/`verify-ca`. Logs a warning. Never in production |
+| `CONSOLE_OIDC_REFRESH_TIMEOUT_SECS` | `4` | Keepalive refresh-grant total timeout (1-10); timeout gives 503 |
+| `CONSOLE_TOOLS_REGISTRY_FILE` | unset | Tool registry TOML; unset = no tools |
+| `CONSOLE_ASSERTION_KEY_FILE` | unset | P-256 PKCS#8 signing key; required with tools |
+| `CONSOLE_ASSERTION_PUBLISH_KEYS_FILE` | unset | Extra public keys for the JWKS |
+| `CONSOLE_TOOL_SESSION_HMAC_KEY_FILE` | unset | `sid` HMAC key (at least 32 bytes); required with tools outside dev mode |
 | `RUST_LOG` | `info` | Log filter. Logs are JSON; audit lines use `target=audit` |
 
 DB URLs with a non-loopback host must use `sslmode=verify-full` or
@@ -284,7 +410,10 @@ Migrations in `crates/console-gateway/migrations/` (sqlx, runtime-checked
 queries, advisory lock): `0001_sessions.sql` (`sessions`,
 `auth_requests`), `0002_audit.sql` (`audit_events`, append-only triggers),
 `0003_roles_refresh.sql` (ownership, grants, `refresh_token`, reauth
-columns).
+columns), `0004_session_idle.sql` (per-row idle limit, `acr`),
+`0005_tool_sessions.sql` (`tool_launch_codes`, `tool_sessions`, audit
+columns), `0006_tool_sessions_multi.sql` (up to 8 tool sessions per
+console session and tool).
 
 | Role | Login | Rights |
 | --- | --- | --- |
@@ -327,6 +456,18 @@ import (redirect URI placeholders) and `e2e/playwright.config.ts`:
 | 9445 `CONSOLE_TLS_PORT_IDLE` | 8083 `CONSOLE_GW_PORT_IDLE` | Idle E2E (idle 150 s) |
 | 9446 `CONSOLE_TLS_PORT_ACR` | 8084 `CONSOLE_GW_PORT_ACR` | Gateway requiring an `acr` the dev realm never issues |
 | (none, direct http) | 8085 `CONSOLE_GW_PORT_RL` | Rate-limit spec gateway |
+| (none, direct http) | 8086 `CONSOLE_GW_PORT_RL_UNTRUSTED` | Rate-limit gateway trusting no proxy |
+| 9447 `CONSOLE_TLS_PORT_TOOL_HELLO` | main gateway | `hello` tool origin (E2E) |
+| 9448 `CONSOLE_TLS_PORT_TOOL_EVIL` | main gateway | `evil` hostile tool origin (E2E) |
+| 9449 `CONSOLE_TLS_PORT_TOOL_RUN` | run gateway | `hello` tool origin for `make run` |
+| 9451 `CONSOLE_TLS_PORT_KA503` | 8088 `CONSOLE_GW_PORT_KA503` | Gateway whose IdP token endpoint is unreachable (keepalive 503), via forward proxy 8091 |
+| 9452 `CONSOLE_TLS_PORT_PRODLIKE` | 8089 `CONSOLE_GW_PORT_PRODLIKE` | prodlike: `console.ops.test`, `hello.tools.ops.test`, `evil.tools.ops.test` (SNI) |
+| 9453 `CONSOLE_TLS_PORT_TOOL_IDLE` | idle gateway | Tool origin on the idle gateway (refresh-gating E2E) |
+| (none) | 8090, 8092, 8093 | hello-tool servers for main, prodlike and idle gateways |
+
+Dev tool origins are port-distinct on `localhost`. Cookies ignore ports,
+so the dev stack cannot show cookie-tossing resistance; the
+`prodlike-chromium` project uses real host names for that.
 
 `make ports-free` (run by `make up`) fails fast if a TLS port is busy.
 Dev realm users (password `dev-only-<username>`): `console_user`,
@@ -349,7 +490,13 @@ The container is a two-stage build. Both base images are pinned by
 The final stage contains the gateway binary and the release `dist` copied to
 `/srv/console`.
 
-Bundle size (release `dist` wasm, `gzip -9`): 173,207 B at M3 (+22.0% over
+Bundle size at M4: **206,548 B** gz (`gzip -c`, QA final round), 13.1%
+of the 1.5 MB budget, +18.6% over `main` (174,214 B). Accepted (PERF-001
+M4: the tool host is the milestone's feature). The CI warn baseline stays
+at 204,977 B (warn above 225,474 B). hello-tool web wasm: about 150 KB gz
+(target under 250 KB).
+
+M3 history: bundle size (release `dist` wasm, `gzip -9`): 173,207 B at M3 (+22.0% over
 the M2 baseline of 141,918 B, mostly `Modal`, `Button`, `Alert` and the
 session code entering the release bundle). 173,207 B is the new baseline
 (`WASM_GZ_BASELINE` in `.github/workflows/ci.yml`). The CI `web` job fails
@@ -360,8 +507,10 @@ above 1.5 MB (1,572,864 B) and warns above baseline x1.10 (190,527 B).
 Playwright (exact pins in `e2e/package-lock.json`) with `@axe-core/playwright`,
 through the compose Keycloak and Caddy TLS (`make up` first;
 `ignoreHTTPSErrors` for Caddy's internal CA). `e2e/playwright.config.ts`
-starts five gateways from `target/release/console-gateway` with
-`gateway.env.example` values (ports above).
+starts the gateways from `target/release/console-gateway` with
+`gateway.env.example` values (ports above), the hello-tool servers, and
+the IdP blackhole proxy; it renders the tool registries into
+`target/e2e-tools/`.
 
 | Project | Target | Specs |
 | --- | --- | --- |
@@ -369,19 +518,27 @@ starts five gateways from `target/release/console-gateway` with
 | `chromium`, `firefox`, `webkit` | main (signed in) | all specs except `dist-smoke` and `idle`: `a11y`, `csp`, `keyboard`, `reflow`, `scope`, `auth`, `session-security`, `session-lifecycle`, `revocation`, `assurance` (uses the ACR and RL gateways) |
 | `idle-chromium`, `idle-firefox`, `idle-webkit` | idle gateway (fresh sign-in) | `idle.spec.ts` |
 | `dist-chromium`, `dist-firefox`, `dist-webkit` | release `dist` (signed in) | `dist-smoke.spec.ts` |
+| M4 additions to the main projects | main + tool origins | `tools`, `tools-norole`, `tool-security`, `tool-isolation`, `tool-a11y`, `session-gaps`, opt-in `proxy-bench` (`E2E_BENCH=1`) |
+| `idle-*` (M4 adds) | idle gateway + tool origin 9453 | `idle-tool.spec.ts` |
+| `ka503-chromium`, `ka503-firefox`, `ka503-webkit` | KA503 gateway | `keepalive-503.spec.ts` |
+| `prodlike-chromium` | prodlike gateway (env `E2E_PRODLIKE=1`; `--host-resolver-rules` locally, `/etc/hosts` in CI) | `prodlike.spec.ts` |
 
 Helpers: `auth-helpers.ts` (Keycloak login), `db-helpers.ts` (audit
 queries and forced expiry via the container engine's psql), `kc-admin.ts`
 (disable user, drop role). axe runs on Chromium only.
 
-Latest local run (fix round 2): `setup`, Chromium and WebKit projects, 184
-passed, 0 failed, 13 skipped by design, 30.4 s. Firefox projects have not
-run, and the CI `e2e` job has not run the M3 suite yet.
+Latest local runs (M4 QA final round): macOS chromium/webkit projects plus
+`prodlike-chromium`, 294 passed, 0 failed, 20 skipped; Linux container
+(`make e2e-linux`, digest-pinned Playwright 1.64.1 image; chromium,
+firefox, webkit; prodlike excluded), 428 passed, 37 skipped, 3 failed (Linux
+WebKit Keycloak sign-in flake, POAM-044; rerun 43/43). The CI `e2e` job
+has not run M4 yet.
 
 ## Compliance
 
 See [compliance/NIST_800-53_MAPPING.md](compliance/NIST_800-53_MAPPING.md),
 [compliance/SESSION_MANAGEMENT.md](compliance/SESSION_MANAGEMENT.md),
 [compliance/AUDIT_LOGGING.md](compliance/AUDIT_LOGGING.md)
-and [compliance/POAM.md](compliance/POAM.md). Deployment requirements:
+[compliance/POAM.md](compliance/POAM.md) and
+[compliance/ACCESSIBILITY.md](compliance/ACCESSIBILITY.md). Deployment requirements:
 [DEPLOYMENT.md](DEPLOYMENT.md).

@@ -79,7 +79,9 @@ impl Manifest {
     }
 }
 
-fn valid_id(id: &str) -> bool {
+/// Tool id rule shared by the manifest, registry, and routes:
+/// 1-32 chars of `[a-z0-9-]`, starting with a letter.
+pub fn valid_id(id: &str) -> bool {
     (1..=32).contains(&id.len())
         && id.starts_with(|c: char| c.is_ascii_lowercase())
         && id
@@ -87,7 +89,8 @@ fn valid_id(id: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
-fn valid_path(p: &str) -> bool {
+/// Tool-relative path rule: starts with `/`; no `..`, `//`, or `:`.
+pub fn valid_path(p: &str) -> bool {
     p.starts_with('/') && !p.contains("..") && !p.contains("//") && !p.contains(':')
 }
 

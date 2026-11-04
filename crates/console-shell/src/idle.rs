@@ -157,6 +157,12 @@ pub fn IdleWatch(p: &IdleWatchProps) -> Html {
 
     let open = *phase == Phase::Open;
     let absolute = dl.is_some_and(|d| d.absolute);
+    // A tool's RequestSessionRefresh is honoured while the warning is shown
+    // (SEC-002/NIST-001; see `activity`).
+    use_effect_with(open, |open| {
+        crate::activity::set_idle_dialog_open(*open);
+        || crate::activity::set_idle_dialog_open(false)
+    });
     use_effect_with((open, absolute), |(open, absolute)| {
         if *open {
             // Runs after the Modal's own effect focused the dialog.

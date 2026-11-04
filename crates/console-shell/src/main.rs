@@ -1,6 +1,7 @@
 //! Console shell entry point: chrome, routing, flash notifications, and theme.
-//! Demo registry and scope picker in M2; real registry and iframe container in M4.
+//! Tool registry (`/api/tools`) and the iframe tool container arrive in M4.
 
+mod activity;
 mod api;
 mod chrome;
 mod ctx;
@@ -11,9 +12,13 @@ mod idle;
 mod scope;
 mod session;
 mod theme;
+mod tool_host;
+mod tool_wire;
+mod tools;
 
-pub use ctx::{PageMeta, ScopeCtx, SessionCtx, ShellCtx, use_page_meta};
+pub use ctx::{PageMeta, ScopeCtx, SessionCtx, ShellCtx, ThemeCtx, use_page_meta};
 use session::SessionInfo;
+use tools::ToolsCtx;
 
 use console_protocol::Scope;
 use console_ui::{
@@ -30,16 +35,75 @@ pub const SIDE_NAV_REGION_ID: &str = "side-nav-region";
 /// Width at and above which the side nav is always shown (A11Y-008).
 const NAV_BREAKPOINT: &str = "(min-width: 45rem)";
 
-#[derive(Clone, Routable, PartialEq)]
+/// Shell routes. `Routable` is implemented by hand (not derived) so the
+/// derive's `urlencoding` round-trip of params is not in the bundle
+/// (PERF-001). Params are taken verbatim: `id` must pass `valid_id`
+/// (lowercase ASCII, so never percent-encoded) and `ToolHost` reads the tool
+/// path from `location`, not from `path`.
+#[derive(Clone, PartialEq, Debug)]
 pub enum Route {
-    #[at("/")]
+    /// `/`
     Home,
+    /// `/tools/:id` - tool container; deep links and reload relaunch at the path.
+    Tool { id: String },
+    /// `/tools/:id/*path`
+    ToolPath { id: String, path: String },
+    /// `/gallery`
     #[cfg(feature = "gallery")]
-    #[at("/gallery")]
     Gallery,
-    #[not_found]
-    #[at("/404")]
+    /// `/404` and anything unmatched.
     NotFound,
+}
+
+impl Routable for Route {
+    fn from_path(path: &str, params: &std::collections::HashMap<&str, &str>) -> Option<Self> {
+        let p = |k: &str| params.get(k).map(|v| (*v).to_owned());
+        match path {
+            "/" => Some(Route::Home),
+            "/tools/:id" => Some(Route::Tool { id: p("id")? }),
+            "/tools/:id/*path" => Some(Route::ToolPath {
+                id: p("id")?,
+                path: p("path")?,
+            }),
+            #[cfg(feature = "gallery")]
+            "/gallery" => Some(Route::Gallery),
+            "/404" => Some(Route::NotFound),
+            _ => None,
+        }
+    }
+
+    fn to_path(&self) -> String {
+        match self {
+            Route::Home => "/".to_owned(),
+            Route::Tool { id } => format!("/tools/{id}"),
+            Route::ToolPath { id, path } => format!("/tools/{id}/{path}"),
+            #[cfg(feature = "gallery")]
+            Route::Gallery => "/gallery".to_owned(),
+            Route::NotFound => "/404".to_owned(),
+        }
+    }
+
+    fn routes() -> Vec<&'static str> {
+        vec![
+            "/",
+            "/tools/:id",
+            "/tools/:id/*path",
+            #[cfg(feature = "gallery")]
+            "/gallery",
+            "/404",
+        ]
+    }
+
+    fn not_found_route() -> Option<Self> {
+        Some(Route::NotFound)
+    }
+
+    fn recognize(pathname: &str) -> Option<Self> {
+        thread_local! {
+            static ROUTER: yew_router::__macro::Router = yew_router::__macro::build_router::<Route>();
+        }
+        ROUTER.with(|r| yew_router::__macro::recognize_with_router(r, pathname))
+    }
 }
 
 /// Id of the chrome region. Modals pass it as `inert_root` and must be
@@ -57,6 +121,7 @@ pub fn modal_root() -> Option<web_sys::Element> {
 fn page_title(route: Option<&Route>) -> &'static str {
     match route {
         Some(Route::Home) | None => "Home",
+        Some(Route::Tool { .. } | Route::ToolPath { .. }) => "Tool",
         #[cfg(feature = "gallery")]
         Some(Route::Gallery) => "Component gallery",
         Some(Route::NotFound) => "Not found",
@@ -91,8 +156,11 @@ fn switch(route: Route) -> Html {
     match route {
         Route::Home => html! {
             <Container header={html! { <h2>{ "Welcome" }</h2> }}>
-                <p>{ "No tools registered yet." }</p>
+                <p>{ "Open a tool from the Services menu or the side navigation." }</p>
             </Container>
+        },
+        Route::Tool { id } | Route::ToolPath { id, .. } => html! {
+            <tool_host::ToolHost key={id.as_str()} id={AttrValue::from(id.clone())} />
         },
         #[cfg(feature = "gallery")]
         Route::Gallery => html! { <gallery::Gallery /> },
@@ -106,42 +174,53 @@ fn switch(route: Route) -> Html {
 
 #[derive(Properties, PartialEq)]
 struct ThemeToggleProps {
+    pref: theme::ThemePref,
+    on_change: Callback<theme::ThemePref>,
     on_error: Callback<(AlertKind, AttrValue)>,
 }
 
 #[function_component]
 fn ThemeToggle(props: &ThemeToggleProps) -> Html {
-    let pref = use_state(theme::load);
-    {
-        let on_error = props.on_error.clone();
-        use_effect_with(*pref, move |p| {
-            if let Err(e) = theme::apply(*p) {
-                on_error.emit((AlertKind::Error, format!("Theme: {e}").into()));
-            }
-        });
-    }
     let onclick = {
-        let pref = pref.clone();
+        let pref = props.pref;
+        let on_change = props.on_change.clone();
         let on_error = props.on_error.clone();
         Callback::from(move |_: MouseEvent| {
-            let next = theme::next(*pref);
+            let next = theme::next(pref);
             if let Err(e) = theme::save(next) {
                 on_error.emit((AlertKind::Warning, format!("Theme not saved: {e}").into()));
             }
-            pref.set(next);
+            on_change.emit(next);
         })
     };
     html! {
         <button type="button" class="topbar__theme" data-testid="theme-toggle"
             title="Cycle theme: system, light, dark" {onclick}>
-            { theme::label(*pref) }
+            { theme::label(props.pref) }
         </button>
     }
 }
 
-fn nav_items() -> Vec<SideNavItem> {
+/// Theme preference, applied to `<html data-theme>` and shared with tools
+/// through [`ThemeCtx`].
+#[hook]
+fn use_theme(
+    flash: Callback<(AlertKind, AttrValue)>,
+) -> (theme::ThemePref, Callback<theme::ThemePref>) {
+    let pref = use_state(theme::load);
+    use_effect_with(*pref, move |p| {
+        if let Err(e) = theme::apply(*p) {
+            flash.emit((AlertKind::Error, format!("Theme: {e}").into()));
+        }
+    });
+    let set = use_callback(pref.setter(), |p, set| set.set(p));
+    (*pref, set)
+}
+
+fn nav_items(tools: &tools::ToolsState, active_tool: Option<&str>) -> Vec<SideNavItem> {
     #[allow(unused_mut)]
     let mut items = vec![SideNavItem::Link(NavLink::new("Home", "/"))];
+    items.extend(tools::nav_sections(tools, active_tool));
     #[cfg(feature = "gallery")]
     items.push(SideNavItem::Section {
         text: "Developer".into(),
@@ -165,7 +244,7 @@ pub(crate) fn same_origin_url(url: &str) -> String {
 
 /// Push (or replace) a same-origin URL through the router's shared history so
 /// `use_location` subscribers are notified.
-fn history_go(url: &str, replace: bool) {
+pub(crate) fn history_go(url: &str, replace: bool) {
     let url = same_origin_url(url);
     let h = BrowserHistory::new();
     if replace {
@@ -289,7 +368,7 @@ fn use_wide(flash: Callback<(AlertKind, AttrValue)>) -> bool {
 }
 
 /// `window.location.origin` (empty if unavailable, which matches nothing).
-fn own_origin() -> String {
+pub(crate) fn own_origin() -> String {
     web_sys::window()
         .and_then(|w| w.location().origin().ok())
         .unwrap_or_default()
@@ -589,7 +668,11 @@ fn Shell() -> Html {
     };
     {
         let flash = flash.clone();
-        use_effect_with(meta.title.clone(), move |t| {
+        let doc_title = meta
+            .document_title
+            .clone()
+            .unwrap_or_else(|| meta.title.clone());
+        use_effect_with(doc_title, move |t| {
             if let Err(e) = set_title(t) {
                 flash.emit((AlertKind::Error, e.into()));
             }
@@ -671,6 +754,29 @@ fn Shell() -> Html {
             }
         })
     };
+    let active_tool: Option<String> = match &route {
+        Some(Route::Tool { id } | Route::ToolPath { id, .. }) => Some(id.clone()),
+        _ => None,
+    };
+    activity::use_activity_tracker(flash.clone());
+    let session_ready = matches!(session_state, SessionState::Ready { .. });
+    let tools_ctx = tools::use_tools(session_ready, flash.clone());
+    let (theme_pref, set_theme) = use_theme(flash.clone());
+    let theme_ctx = ThemeCtx { pref: theme_pref };
+    let skip_to_tool = active_tool.is_some().then(|| {
+        // Focus the frame and ask the tool for its first control (A11Y-001).
+        let onclick = Callback::from(|e: MouseEvent| {
+            e.prevent_default();
+            if !tool_host::enter_tool(console_protocol::FocusEdge::First) {
+                focus_selector(&format!("#{}", tool_host::FRAME_ID));
+            }
+        });
+        html! {
+            <a class="skip-link" href={format!("#{}", tool_host::FRAME_ID)} {onclick}
+                data-testid="skip-to-tool">{ "Skip to tool content" }</a>
+        }
+    });
+    let side_items = nav_items(&tools_ctx.state, active_tool.as_deref());
     let active_href: Option<AttrValue> = route.map(|r| r.to_path().into());
     let ctx = use_memo((flash.clone(), set_page), |(flash, set_page)| ShellCtx {
         flash: flash.clone(),
@@ -681,8 +787,11 @@ fn Shell() -> Html {
         <ContextProvider<ShellCtx> context={(*ctx).clone()}>
         <ContextProvider<SessionCtx> context={session_ctx}>
         <ContextProvider<ScopeCtx> context={(*scope_ctx).clone()}>
+        <ContextProvider<ToolsCtx> context={tools_ctx}>
+        <ContextProvider<ThemeCtx> context={theme_ctx}>
             <div class="app" id={APP_CHROME_ID}>
                 <a class="skip-link" href="#main-content">{ "Skip to main content" }</a>
+                { for skip_to_tool }
                 <TopNavigation
                     brand={html! { <a href="/" onclick={brand_click}>{ "USG Ops Console" }</a> }}
                     start={html! {
@@ -696,7 +805,7 @@ fn Shell() -> Html {
                     search={html! { <chrome::GlobalSearch flash={flash.clone()} /> }}
                     utilities={html! {
                         <>
-                            <ThemeToggle on_error={flash.clone()} />
+                            <ThemeToggle pref={theme_pref} on_change={set_theme} on_error={flash.clone()} />
                             <chrome::UserMenu flash={flash.clone()} />
                         </>
                     }}
@@ -713,7 +822,7 @@ fn Shell() -> Html {
                 <div class="layout">
                     <div class="sidenav-region" id={SIDE_NAV_REGION_ID} hidden={nav_hidden}
                         onkeydown={on_nav_key}>
-                        <SideNavigation aria_label="Console" items={nav_items()}
+                        <SideNavigation aria_label="Console" items={side_items}
                             {active_href} onfollow={Some(onfollow.clone())} />
                     </div>
                     <main class="content" id="main-content" tabindex="-1">
@@ -731,6 +840,8 @@ fn Shell() -> Html {
             </div>
             <div id="modal-root" />
             { idle_watch }
+        </ContextProvider<ThemeCtx>>
+        </ContextProvider<ToolsCtx>>
         </ContextProvider<ScopeCtx>>
         </ContextProvider<SessionCtx>>
         </ContextProvider<ShellCtx>>
@@ -771,6 +882,34 @@ mod tests {
                 out.starts_with('/') && !out[1..].starts_with(['/', '\\']),
                 "{u} -> {out}"
             );
+        }
+    }
+
+    #[test]
+    fn tool_routes_recognise_deep_links() {
+        let id = |r: Option<Route>| match r {
+            Some(Route::Tool { id } | Route::ToolPath { id, .. }) => Some(id),
+            _ => None,
+        };
+        for p in ["/tools/hello", "/tools/hello/", "/tools/hello/a/b"] {
+            assert_eq!(id(Route::recognize(p)).as_deref(), Some("hello"), "{p}");
+        }
+        assert!(matches!(Route::recognize("/tools"), Some(Route::NotFound)));
+        assert!(matches!(Route::recognize("/nope"), Some(Route::NotFound)));
+        assert!(matches!(Route::recognize("/"), Some(Route::Home)));
+        // Params are verbatim (no percent-decoding; PERF-001).
+        assert!(matches!(Route::recognize("/tools/a%2Fb"),
+            Some(Route::Tool { id }) if id == "a%2Fb"));
+        for r in [
+            Route::Home,
+            Route::Tool { id: "hello".into() },
+            Route::ToolPath {
+                id: "hello".into(),
+                path: "a/b".into(),
+            },
+            Route::NotFound,
+        ] {
+            assert_eq!(Route::recognize(&r.to_path()), Some(r.clone()), "{r:?}");
         }
     }
 

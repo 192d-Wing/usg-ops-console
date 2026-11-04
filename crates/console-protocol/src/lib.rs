@@ -7,11 +7,19 @@
 pub mod manifest;
 pub mod message;
 pub mod session;
+pub mod tools;
 
-pub use manifest::{Manifest, ManifestError, NavItem};
-pub use message::{Level, Scope, ShellToTool, ToolToShell, User};
+pub use manifest::{Manifest, ManifestError, NavItem, valid_id, valid_path};
+pub use message::{
+    FocusEdge, Level, MAX_MESSAGE_BYTES, MAX_NOTIFY_CHARS, MessageError, Scope, ShellToTool,
+    ToolToShell, User,
+};
 pub use session::{
     AuthErrorBody, AuthErrorKind, AuthErrorReason, LogoutResponse, SessionInfo, SessionUser,
+};
+pub use tools::{
+    AssertionClaims, LaunchRequest, LaunchResponse, ToolContext, ToolNavItem, ToolSummary,
+    ToolsResponse,
 };
 
 /// SDK protocol version spoken by this build of the shell.

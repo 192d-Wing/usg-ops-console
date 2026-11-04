@@ -1,6 +1,7 @@
 # Deployment
 
-Status as of M3, 2026-11-03. This covers what a deployment of
+Status as of M4 (tool hosting), 2026-11-04. M4 has not run in CI yet
+(pending push). This covers what a deployment of
 `console-gateway` needs today. The Helm chart is not built yet (M7); the
 requirements below are what it must implement. Configuration reference:
 [ARCHITECTURE.md](ARCHITECTURE.md#configuration).
@@ -13,7 +14,9 @@ requirements below are what it must implement. Configuration reference:
   audit log.
 - Keycloak realm `icam` (shared with usg-dcim) with a confidential client
   `usg-ops-console`.
-- A TLS-terminating ingress or reverse proxy in front of the gateway.
+- A TLS-terminating ingress or reverse proxy in front of the gateway,
+  serving the console origin **and** every tool origin (M4).
+- Tool upstreams (independently deployed), reachable from the gateway.
 
 ## Environment keys
 
@@ -32,15 +35,29 @@ Required:
 
 Optional, with defaults: `CONSOLE_LISTEN` (`0.0.0.0:8080`), `CONSOLE_DIST`,
 `CONSOLE_OIDC_REDIRECT_PATH` (`/callback`), `CONSOLE_OIDC_DISCOVERY_RETRIES`
-(10), `CONSOLE_DB_MAX_CONNECTIONS` (10), `CONSOLE_AUDIT_DB_MAX_CONNECTIONS`
+(10), `CONSOLE_DB_MAX_CONNECTIONS` (**32** since M4, was 10; see [Database connection budget](#database-connection-budget)), `CONSOLE_AUDIT_DB_MAX_CONNECTIONS`
 (4), `CONSOLE_SESSION_IDLE_SECS` (900), `CONSOLE_SESSION_ABSOLUTE_SECS`
 (43200), `CONSOLE_SWEEP_INTERVAL_SECS` (60), `CONSOLE_REQUIRED_ROLE`
-(`console-user`), `RUST_LOG` (`info`).
+(`console-user`), `RUST_LOG` (`info`), `CONSOLE_OIDC_REFRESH_TIMEOUT_SECS`
+(4, range 1-10; keepalive refresh-grant timeout, then 503).
+
+Tool hosting (M4):
+
+| Key | Notes |
+| --- | --- |
+| `CONSOLE_TOOLS_REGISTRY_FILE` | Path to the registry TOML. Unset: no tools (startup warning). Set but unreadable or invalid: boot fails |
+| `CONSOLE_ASSERTION_KEY_FILE` | PKCS#8 PEM P-256 private key (`-----BEGIN PRIVATE KEY-----`). Required when the registry has tools |
+| `CONSOLE_ASSERTION_PUBLISH_KEYS_FILE` | Optional PEM bundle of SPKI public keys (`-----BEGIN PUBLIC KEY-----`) published in the JWKS next to the active key (rotation overlap) |
+| `CONSOLE_TOOL_SESSION_HMAC_KEY_FILE` | Key for the per-tool `sid` pseudonym, at least 32 bytes. **Required when the registry has tools and `CONSOLE_DEV_MODE` is not true** (boot fails otherwise) |
+
+Reference values: `deploy/compose/gateway.env.example` and
+`deploy/compose/secrets/README.md` (DEV ONLY).
 
 Must **not** be set in production:
 
-- `CONSOLE_DEV_MODE`: it allows an unset `CONSOLE_REQUIRED_ACR` and DB
-  connections without verified TLS.
+- `CONSOLE_DEV_MODE`: it allows an unset `CONSOLE_REQUIRED_ACR`, DB
+  connections without verified TLS, plain-http non-loopback tool
+  upstreams, and a `sid` key derived from the assertion key.
 - `CONSOLE_MIGRATOR_DATABASE_URL[_FILE]` on the long-running gateway (see
   below, POAM-027).
 
@@ -55,6 +72,136 @@ read from files: `CONSOLE_OIDC_CLIENT_SECRET_FILE`,
 `CONSOLE_MIGRATOR_DATABASE_URL_FILE`. Mount them from Kubernetes Secrets.
 The direct env forms work but log a startup warning naming the `_FILE`
 key. Secret values are never logged (`Secret` redacts in `Debug`).
+
+## Tool origins, DNS and certificates
+
+Each registry tool is served on **its own origin**, normally
+`https://<id>.tools.<domain>`, a sibling of the console host (for example
+console `https://console.ops.example.mil`, tool
+`https://hello.tools.ops.example.mil`). The same gateway serves all of
+them and routes on the `Host` header.
+
+- Provide **wildcard DNS** for `*.tools.<domain>` pointing at the ingress,
+  and a **wildcard certificate** for `*.tools.<domain>` (or one SAN per
+  tool). Adding a tool then needs only a registry entry.
+- **Dedicated registrable domain (SEC-010, required).** The console origin
+  and all tool origins must sit under a registrable domain (eTLD+1) that
+  hosts **nothing else**. Launch-code acceptance relies on
+  `Sec-Fetch-Site: same-site`, which covers every host under the
+  registrable domain; any other application on that domain would count as
+  "same site". Accepted residual, POAM-035.
+- **The ingress must pass `Host` unchanged** to the gateway for both the
+  console and the tool hosts. An unknown `Host` is served by the console
+  app; a tool origin that receives another tool's path answers 421.
+- The registry validates that every `origin` is `https`, unique, and not
+  equal to or a subdomain of the `CONSOLE_PUBLIC_URL` host, and fails boot
+  otherwise.
+- The console CSP `frame-src` is computed from the registry origins
+  (`'none'` with no tools).
+- Tool upstreams should be reachable only from the gateway (they trust
+  the assertion header).
+
+## Tool registry
+
+Format: TOML, mounted read-only into the gateway (path in
+`CONSOLE_TOOLS_REGISTRY_FILE`) and changed only through Git/Helm review.
+It is the only runtime source of tool configuration; tool manifests are
+not fetched. Validation is fail-closed and every error names the file, the
+tool and the field.
+
+```toml
+schema = 1                          # optional; any other value fails boot
+
+[[tool]]
+id = "hello"                        # 1-32 chars [a-z0-9-], starts with a letter
+title = "Hello Tool"
+category = "Examples"               # optional
+icon = "puzzle"                     # optional
+origin = "https://hello.tools.ops.example.mil"
+upstream = "https://hello.internal:8443/"   # path must be "/"; no userinfo or query
+upstream_ca_file = "/etc/console/ca/hello.pem"   # optional extra trust anchor
+required_roles = ["hello:user"]     # any-of; empty = any console user
+forward_roles = ["hello:"]          # role prefixes copied into the assertion; default = required_roles
+scopes = ["site", "tenant"]         # of site, tenant, environment
+entry = "/"
+max_body_bytes = 10485760           # default 10 MiB, max 100 MiB
+response_header_timeout_secs = 30   # default 30, 1-300
+max_concurrent = 256                # default 256
+forward_headers = ["x-hello-csrf"]  # extra request headers; reserved names refused
+audit_writes = false                # audit unsafe-method requests as tool.request
+[[tool.nav]]
+label = "Overview"                  # at most 64 chars, at most 32 items
+path = "/"
+```
+
+Limits: at most 64 tools. Roles named in any `required_roles`, or matching
+a `forward_roles` prefix, are kept on the session in addition to
+`console-*`; they must reach the id_token `realm_access.roles` claim
+(Keycloak realm roles mapped into the id_token). Role changes apply at the
+next login or keepalive.
+
+**Schema stability and rollback.** Unknown keys fail boot (a typo must not
+silently drop a control). Add a new key to a deployed registry only after
+every gateway replica, **including the rollback target**, understands it;
+otherwise a rollback cannot start.
+
+**Plain-http upstreams.** Outside dev mode, a non-loopback upstream must be
+`https` with full certificate verification. `insecure_http_upstream = true`
+allows plain http only together with
+`insecure_http_upstream_reason = "<1-200 characters>"` (a reason without
+the flag is an error). The gateway logs a warning and writes a
+`registry.insecure_upstream` audit event at every start (boot fails if
+that write fails). This is a CM-6 deviation: it is acceptable only with a
+**compensating control** such as service-mesh mTLS between gateway and
+upstream, which the gateway does not verify (POAM-037). Record the control
+for each tool that sets it.
+
+Every start also writes `registry.loaded` (fail closed).
+
+## Tool keys
+
+- **Assertion signing key** (`CONSOLE_ASSERTION_KEY_FILE`): P-256, PKCS#8
+  PEM. The `kid` is its RFC 7638 thumbprint.
+- **Published keys and JWKS.** `GET <console>/.well-known/jwks.json` is
+  public and served with `Cache-Control: public, max-age=300`; tools cache
+  it for at most 10 minutes. It lists the active key plus
+  `CONSOLE_ASSERTION_PUBLISH_KEYS_FILE` keys. Keys load at startup only.
+- **Rotation runbook:** add the new public key to the publish bundle and
+  restart; wait at least JWKS max-age plus the tool cache (10 min); switch
+  `CONSOLE_ASSERTION_KEY_FILE` to the new key (keep the old public key in
+  the bundle) and restart; after at least 2 x assertion TTL (60 s) plus
+  the cache time, remove the old key.
+- **sid HMAC key** (`CONSOLE_TOOL_SESSION_HMAC_KEY_FILE`): at least 32
+  bytes after decoding. The file is read as bytes: UTF-8 text whose
+  trimmed form is standard base64 and decodes to at least 32 bytes is
+  decoded; other UTF-8 text is trimmed and used as bytes; non-UTF-8
+  content is used raw. Example: `openssl rand -base64 48 > key` (decodes to
+  48 bytes). Changing it changes every `sid` pseudonym (tools see new
+  values), the same as a rotation. Use the same file on every replica.
+- Mount all three from Kubernetes Secrets; values are never logged.
+
+## Database connection budget
+
+`CONSOLE_DB_MAX_CONNECTIONS` defaults to **32** (range 1-200) and
+`CONSOLE_AUDIT_DB_MAX_CONNECTIONS` to 4, so each replica can open **36**
+connections. Stock Postgres and CNPG default to `max_connections = 100`
+(3 reserved), which fits two replicas with headroom for the migrator and
+admin sessions.
+
+- **For 3 or more replicas:** raise Postgres `max_connections`, or lower
+  the per-replica pool, or use a **session-mode** pooler.
+- **Transaction-mode pooling is not supported** (PgBouncer or CNPG Pooler
+  in transaction mode): sqlx uses per-connection prepared statements and
+  the gateway has no setting to turn the statement cache off (POAM-042).
+- The pool does not ping before use; idle connections close after 300 s
+  and live at most 30 min. Set any load balancer or proxy idle timeout
+  between gateway and Postgres **above 300 s**. After a DB failover, the
+  read-only session lookup retries once on a connection-class error;
+  other requests may see 503 until the pool refreshes.
+- The proxy path holds one connection per request only for the session
+  lookup (one indexed join), never during upstream I/O.
+
+Sizing is tracked as POAM-041.
 
 ## Database roles and migrations
 
@@ -75,6 +222,11 @@ SCHEMA public FROM PUBLIC`. The reference SQL is
 `deploy/compose/postgres/init/01-roles.sh`; verify the result after
 migrating with `psql -f deploy/compose/postgres/check-roles.sql` (prints
 `SEC-006 role contract OK`).
+
+M4 migrations: `0004_session_idle.sql` (per-session idle limit),
+`0005_tool_sessions.sql` (tool sessions, launch codes, audit columns),
+`0006_tool_sessions_multi.sql` (up to 8 tool sessions per console
+session and tool). Run `console-gateway migrate` before rolling out M4.
 
 Run migrations as a separate one-shot job or init container:
 
@@ -114,7 +266,9 @@ POAM-029).
   user is denied with `missing_role` (the usg-dcim gotcha).
 - **Audience mapper**: include `usg-ops-console` in the id_token audience.
 - **Realm roles**: `console-user` (required for a session), optionally
-  `console-admin`. The gateway keeps only `console-*` roles.
+  `console-admin`. The gateway keeps `console-*` roles plus (M4) roles
+  named by the tool registry (`required_roles`, `forward_roles` prefixes),
+  for example `hello:user`; they must be in the id_token too.
 - **LoA / acr mapping**: an `acr.loa.map` (realm and client) that maps the
   X.509/CAC authentication level to the value in `CONSOLE_REQUIRED_ACR`,
   and a browser flow with a conditional level-of-authentication step, so
@@ -152,6 +306,8 @@ TLS-terminating ingress or proxy is **required**:
 - The ingress must set `X-Forwarded-For`, and its addresses must be in
   `CONSOLE_TRUSTED_PROXIES`.
 - Keep the gateway port reachable only from the ingress.
+- The ingress serves the console host and `*.tools.<domain>` and must
+  pass `Host` unchanged (see [Tool origins](#tool-origins-dns-and-certificates)).
 - Ingress-level rate limiting is recommended; the gateway rate-limits only
   `/login` (POAM-020).
 
@@ -189,10 +345,22 @@ none of these files are in the image build context (`.containerignore`).
    migration 0003 changes table ownership and fails on tables owned by the
    old `console` role.
 
+4. M4: `make up` also generates DEV ONLY tool keys in
+   `deploy/compose/secrets/` (P-256 assertion key and the sid HMAC key,
+   mode 600, git-ignored) and renders the tool registries into
+   `target/e2e-tools/`. `make run` starts the hello-tool server and
+   serves it at `https://localhost:9449`. Run `make down-clean` once after
+   pulling M4 (migration 0006 is new).
+
+The example `examples/hello-tool/Containerfile` is a template for tool
+images (build from the repo root). It is not part of the release image
+and is **not built in CI** (unverified build).
+
 ### Port clashes
 
-Ports come from `deploy/compose/ports.env` (TLS 9442-9446, host gateways
-8080-8085, Keycloak 8180, Postgres 5432). `make up` runs `make ports-free`
+Ports come from `deploy/compose/ports.env` (TLS 9442-9453, host gateways
+8080-8089, hello-tool upstreams 8090/8092/8093, IdP blackhole proxy 8091,
+Keycloak 8180, Postgres 5432). `make up` runs `make ports-free`
 first and fails with the busy port numbers. Override any port from the
 environment, for example:
 

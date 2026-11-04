@@ -187,6 +187,8 @@ pub enum RefreshMode {
     /// `502` with a non-JSON body: a transport/parse failure, i.e. the
     /// "IdP unavailable" path (not a rejection).
     Broken,
+    /// Sleeps this many seconds before answering (PERF-008 timeout).
+    Slow(u64),
 }
 
 /// Stub IdP state: the next token response is built from `next`.
@@ -257,6 +259,10 @@ async fn token(State(s): State<StubIdp>, headers: HeaderMap, body: String) -> Re
                 }))
                 .into_response()
             }
+            (RefreshMode::Slow(secs), _) => {
+                tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+                (StatusCode::BAD_GATEWAY, "too late").into_response()
+            }
             (RefreshMode::Broken, _) => {
                 (StatusCode::BAD_GATEWAY, "upstream exploded").into_response()
             }
@@ -289,4 +295,202 @@ async fn token(State(s): State<StubIdp>, headers: HeaderMap, body: String) -> Re
         "id_token": spec.sign(),
     }))
     .into_response()
+}
+
+// ---------------------------------------------------------------------------
+// M4 tools: test registry, keys and an in-process echo upstream
+// ---------------------------------------------------------------------------
+
+pub const TOOL_KEY: &str = include_str!("../fixtures/test-only-p256.pem");
+pub const HELLO_HOST: &str = "hello.tools.test";
+pub const HELLO_ORIGIN: &str = "https://hello.tools.test";
+
+/// What the echo upstream saw.
+#[derive(Clone, Debug)]
+pub struct Seen {
+    pub method: String,
+    pub uri: String,
+    pub headers: axum::http::HeaderMap,
+    pub body_len: usize,
+}
+
+#[derive(Clone, Default)]
+pub struct Echo {
+    pub port: u16,
+    pub seen: Arc<Mutex<Vec<Seen>>>,
+    /// Released to let `/stream` finish.
+    pub release: Arc<tokio::sync::Notify>,
+}
+
+impl Echo {
+    pub fn last(&self) -> Seen {
+        self.seen
+            .lock()
+            .unwrap()
+            .last()
+            .cloned()
+            .expect("upstream was called")
+    }
+    pub fn count(&self) -> usize {
+        self.seen.lock().unwrap().len()
+    }
+}
+
+/// Echo upstream on 127.0.0.1:<ephemeral>. Paths under any `/t/<id>/`:
+/// `slow` sleeps 3 s, `stream` sends one chunk then waits for `release`,
+/// `redirect` answers 302 to an absolute upstream URL, `foreign-redirect`
+/// 302 to another origin, everything else
+/// echoes the request headers as JSON and sets test cookies.
+pub async fn start_echo() -> Echo {
+    use axum::body::Body;
+    use axum::extract::Request;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let echo = Echo {
+        port,
+        ..Default::default()
+    };
+    let st = echo.clone();
+    let app = Router::new().fallback(move |req: Request| {
+        let st = st.clone();
+        async move {
+            let (parts, body) = req.into_parts();
+            let path = parts.uri.path().to_owned();
+            let bytes = axum::body::to_bytes(body, 64 * 1024 * 1024)
+                .await
+                .unwrap_or_default();
+            st.seen.lock().unwrap().push(Seen {
+                method: parts.method.to_string(),
+                uri: parts.uri.to_string(),
+                headers: parts.headers.clone(),
+                body_len: bytes.len(),
+            });
+            if path.ends_with("/slow") {
+                tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                return "slow".into_response();
+            }
+            if path.ends_with("/stream") {
+                let release = st.release.clone();
+                let s = async_stream_body(release);
+                return Response::builder()
+                    .header("content-type", "text/plain")
+                    .body(s)
+                    .unwrap();
+            }
+            if path.ends_with("/foreign-redirect") {
+                return Response::builder()
+                    .status(302)
+                    .header("location", "https://evil.example/phish")
+                    .body(Body::empty())
+                    .unwrap();
+            }
+            if path.ends_with("/redirect") {
+                return Response::builder()
+                    .status(302)
+                    .header("location", format!("http://127.0.0.1:{port}/t/hello/next"))
+                    .body(Body::empty())
+                    .unwrap();
+            }
+            let names: Vec<String> = parts.headers.keys().map(|k| k.to_string()).collect();
+            let mut res = Json(serde_json::json!({ "headers": names })).into_response();
+            let h = res.headers_mut();
+            for c in [
+                "pref=dark; Path=/",
+                "__Host-tool_sid=evil; Path=/; Secure",
+                "__Host-console_sid=evil; Path=/; Secure",
+                "wide=1; Domain=tools.test; Path=/",
+            ] {
+                h.append("set-cookie", c.parse().unwrap());
+            }
+            h.insert("server", "echo/1".parse().unwrap());
+            h.insert("strict-transport-security", "max-age=0".parse().unwrap());
+            res
+        }
+    });
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    echo
+}
+
+/// One chunk now, the rest after `release` is notified.
+fn async_stream_body(release: Arc<tokio::sync::Notify>) -> axum::body::Body {
+    let (tx, rx) = tokio::sync::mpsc::channel::<axum::body::Bytes>(2);
+    tokio::spawn(async move {
+        let _ = tx.send(axum::body::Bytes::from_static(b"first;")).await;
+        release.notified().await;
+        let _ = tx.send(axum::body::Bytes::from_static(b"last")).await;
+    });
+    axum::body::Body::new(ChannelBody(rx))
+}
+
+struct ChannelBody(tokio::sync::mpsc::Receiver<axum::body::Bytes>);
+
+impl http_body::Body for ChannelBody {
+    type Data = axum::body::Bytes;
+    type Error = std::io::Error;
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        self.0
+            .poll_recv(cx)
+            .map(|o| o.map(|b| Ok(http_body::Frame::data(b))))
+    }
+}
+
+/// Test registry against the echo upstream on `port`.
+pub fn registry_toml(port: u16) -> String {
+    format!(
+        r#"
+[[tool]]
+id = "hello"
+title = "Hello Tool"
+origin = "{HELLO_ORIGIN}"
+upstream = "http://127.0.0.1:{port}"
+required_roles = ["hello:user"]
+forward_roles = ["hello:"]
+scopes = ["site"]
+audit_writes = true
+forward_headers = ["x-hello-csrf"]
+[[tool.nav]]
+label = "Overview"
+path = "/"
+
+[[tool]]
+id = "tight"
+title = "Tight limits"
+origin = "https://tight.tools.test"
+upstream = "http://127.0.0.1:{port}"
+response_header_timeout_secs = 1
+max_body_bytes = 16
+max_concurrent = 1
+
+[[tool]]
+id = "dead"
+title = "Dead upstream"
+origin = "https://dead.tools.test"
+upstream = "http://127.0.0.1:1"
+
+[[tool]]
+id = "denied"
+title = "Denied"
+origin = "https://denied.tools.test"
+upstream = "http://127.0.0.1:{port}"
+required_roles = ["nobody:none"]
+"#
+    )
+}
+
+pub fn tools_state(cfg: &Config, registry: &str) -> console_gateway::registry::ToolsState {
+    let tools = console_gateway::registry::parse(
+        "test-registry.toml",
+        registry,
+        &cfg.public_url,
+        false,
+        &mut Vec::new(),
+    )
+    .unwrap();
+    let keys = console_gateway::assertion::AssertionKeys::from_pem(TOOL_KEY, None, None).unwrap();
+    console_gateway::registry::ToolsState::new(tools, Some(keys), &|_| None).unwrap()
 }

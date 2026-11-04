@@ -1,0 +1,49 @@
+# DEV/E2E ONLY tool registry (E2E main gateway). Gateway-owned allow-list (plan §4.1);
+# the registry is authoritative, tool manifests are presentation templates only.
+# ${CONSOLE_*} placeholders are rendered from deploy/compose/ports.env by
+# `make tools-registries` (for make run) and by e2e/playwright.config.ts into
+# target/e2e-tools/ before the gateway starts. Never deployed (Helm renders
+# its own registry in M7).
+
+# Registry schema version (fix round 1, INT-010): any other value fails boot.
+schema = 1
+
+[[tool]]
+id = "hello"
+title = "Hello Tool"
+category = "Examples"
+icon = "puzzle"
+origin = "https://localhost:${CONSOLE_TLS_PORT_TOOL_HELLO}"
+upstream = "http://127.0.0.1:${CONSOLE_PORT_HELLO_UPSTREAM}"
+required_roles = ["hello:user"]
+forward_roles = ["hello:"]
+scopes = ["site", "tenant"]
+entry = "/"
+audit_writes = true
+forward_headers = ["x-hello-csrf"]
+[[tool.nav]]
+label = "Overview"
+path = "/"
+[[tool.nav]]
+label = "Request headers"
+path = "/headers"
+
+# Hostile fixture (E2E only): served by the hello server; tries sandbox
+# escapes, console API calls and postMessage spoofing (tool-security.spec.ts).
+[[tool]]
+id = "evil"
+title = "Evil Tool (E2E)"
+category = "Examples"
+origin = "https://localhost:${CONSOLE_TLS_PORT_TOOL_EVIL}"
+upstream = "http://127.0.0.1:${CONSOLE_PORT_HELLO_UPSTREAM}"
+required_roles = ["hello:user"]
+entry = "/"
+
+# Role nobody holds: hidden from /api/tools, launch -> 403 (tools.spec.ts).
+# Its origin is never served (no Caddy site); it only has to be unique.
+[[tool]]
+id = "denied"
+title = "Denied Tool (E2E)"
+origin = "https://localhost:59999"
+upstream = "http://127.0.0.1:${CONSOLE_PORT_HELLO_UPSTREAM}"
+required_roles = ["nobody:none"]

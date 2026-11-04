@@ -87,10 +87,27 @@ pub fn read_cookie(headers: &HeaderMap, name: &str) -> Option<String> {
 /// `Set-Cookie` value for a session-lifetime cookie (no `Max-Age`; the
 /// server-side expiry is authoritative) or, with `max_age`, a bounded one.
 pub fn set_cookie(name: &'static str, value: String, max_age: Option<Duration>) -> String {
+    build_cookie(name, value, max_age, SameSite::Lax)
+}
+
+/// Same flags as [`set_cookie`] but `SameSite=Strict` (tool-origin cookies:
+/// only ever needed on same-site requests from the console's iframe).
+// COMPLIANCE MAPPING:
+// - NIST 800-53: SC-23 (Session Authenticity) — __Host-tool_sid: Secure, HttpOnly, SameSite=Strict, host-only
+pub fn set_cookie_strict(name: &'static str, value: String, max_age: Option<Duration>) -> String {
+    build_cookie(name, value, max_age, SameSite::Strict)
+}
+
+fn build_cookie(
+    name: &'static str,
+    value: String,
+    max_age: Option<Duration>,
+    same_site: SameSite,
+) -> String {
     let mut c = Cookie::build((name, value))
         .secure(true)
         .http_only(true)
-        .same_site(SameSite::Lax)
+        .same_site(same_site)
         .path("/");
     if let Some(age) = max_age {
         c = c.max_age(cookie::time::Duration::seconds(
@@ -121,6 +138,26 @@ pub struct Session {
     pub created_at: DateTime<Utc>,
     pub last_seen_at: DateTime<Utc>,
     pub absolute_expires_at: DateTime<Utc>,
+    /// Idle limit fixed at creation (POAM-031); `None` on pre-M4 rows.
+    pub idle_timeout_secs: Option<i32>,
+    /// id_token `acr` at sign-in (carried in tool assertions).
+    pub acr: Option<String>,
+}
+
+impl Session {
+    /// The row's idle limit, or `fallback` (this gateway's config) for
+    /// legacy rows.
+    pub fn idle(&self, fallback: Duration) -> Duration {
+        idle_or(self.idle_timeout_secs, fallback)
+    }
+}
+
+/// Row idle seconds (if positive) or `fallback`.
+pub fn idle_or(secs: Option<i32>, fallback: Duration) -> Duration {
+    secs.and_then(|v| u64::try_from(v).ok())
+        .filter(|v| *v > 0)
+        .map(Duration::from_secs)
+        .unwrap_or(fallback)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -205,6 +242,9 @@ pub struct NewSession<'a> {
     pub refresh_token: Option<&'a str>,
     pub now: DateTime<Utc>,
     pub absolute_expires_at: DateTime<Utc>,
+    /// This gateway's idle limit, stored on the row (POAM-031).
+    pub idle: Duration,
+    pub acr: Option<&'a str>,
     pub client_ip: Option<IpAddr>,
     pub user_agent: Option<&'a str>,
 }
@@ -240,8 +280,19 @@ pub struct SessionStore {
     pool: PgPool,
 }
 
-const SESSION_COLS: &str = "id_hash, user_sub, username, display_name, roles, csrf_token, \
-                            created_at, last_seen_at, absolute_expires_at";
+pub(crate) const SESSION_COLS: &str = "id_hash, user_sub, username, display_name, roles, \
+                            csrf_token, created_at, last_seen_at, absolute_expires_at, \
+                            idle_timeout_secs, acr";
+
+/// SQL for "the row's idle limit as an interval" with `$fallback` (an
+/// integer seconds parameter) for legacy rows.
+fn idle_interval(fallback_param: &str) -> String {
+    format!("make_interval(secs => COALESCE(idle_timeout_secs, {fallback_param}))")
+}
+
+fn secs_i32(d: Duration) -> i32 {
+    i32::try_from(d.as_secs()).unwrap_or(i32::MAX)
+}
 
 impl SessionStore {
     pub fn new(pool: PgPool) -> Self {
@@ -303,6 +354,18 @@ impl SessionStore {
     /// Per-request lookup. Pool acquire and query are timed separately in
     /// `debug` events under the `session.lookup` span (PERF-005).
     pub async fn load(&self, id_hash: &[u8]) -> Result<Option<Session>, sqlx::Error> {
+        // QA F3 / perf MINOR (c): read-only, so retried once on a dead
+        // pooled connection (pool runs with `test_before_acquire(false)`).
+        match self.load_once(id_hash).await {
+            Err(e) if is_connection_error(&e) => {
+                tracing::warn!(error = %e, "session lookup hit a dead connection; retrying once");
+                self.load_once(id_hash).await
+            }
+            r => r,
+        }
+    }
+
+    async fn load_once(&self, id_hash: &[u8]) -> Result<Option<Session>, sqlx::Error> {
         async {
             let t0 = std::time::Instant::now();
             let mut conn = self.pool.acquire().await?;
@@ -345,6 +408,14 @@ impl SessionStore {
                 .execute(&self.pool)
                 .await
                 .is_ok()
+            && sqlx::query("SELECT idle_timeout_secs, idle_expires_at, acr FROM sessions LIMIT 0")
+                .execute(&self.pool)
+                .await
+                .is_ok()
+            && sqlx::query("SELECT 1 FROM tool_sessions, tool_launch_codes LIMIT 0")
+                .execute(&self.pool)
+                .await
+                .is_ok()
     }
 
     /// Rotation: deletes any session for the presented (pre-login) id and
@@ -368,8 +439,8 @@ impl SessionStore {
         sqlx::query(
             "INSERT INTO sessions (id_hash, user_sub, username, display_name, roles, csrf_token, \
              id_token, created_at, last_seen_at, absolute_expires_at, client_ip, user_agent, \
-             refresh_token) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10::inet, $11, $12)",
+             refresh_token, idle_timeout_secs, idle_expires_at, acr) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8, $9, $10::inet, $11, $12, $13, $14, $15)",
         )
         .bind(new.id_hash)
         .bind(new.user_sub)
@@ -383,6 +454,9 @@ impl SessionStore {
         .bind(new.client_ip.map(|ip| ip.to_string()))
         .bind(new.user_agent)
         .bind(new.refresh_token)
+        .bind(secs_i32(new.idle))
+        .bind(idle_deadline(new.now, DateTime::<Utc>::MAX_UTC, new.idle))
+        .bind(new.acr)
         .execute(&mut *tx)
         .await?;
         Ok(tx)
@@ -398,20 +472,24 @@ impl SessionStore {
         .await
     }
 
-    /// Keepalive: moves `last_seen_at` only while the session is still live.
+    /// Keepalive: moves `last_seen_at` (and the row's idle deadline) only
+    /// while the session is still live under the row's own idle limit.
+    /// `idle` is the fallback for legacy rows, which adopt it.
     pub async fn touch(
         &self,
         id_hash: &[u8],
         now: DateTime<Utc>,
         idle: Duration,
     ) -> Result<bool, sqlx::Error> {
-        let res = sqlx::query(
-            "UPDATE sessions SET last_seen_at = $2 \
-             WHERE id_hash = $1 AND absolute_expires_at > $2 AND last_seen_at > $3",
-        )
+        let iv = idle_interval("$3");
+        let res = sqlx::query(&format!(
+            "UPDATE sessions SET last_seen_at = $2, idle_expires_at = $2 + {iv}, \
+                    idle_timeout_secs = COALESCE(idle_timeout_secs, $3) \
+             WHERE id_hash = $1 AND absolute_expires_at > $2 AND last_seen_at + {iv} > $2"
+        ))
         .bind(id_hash)
         .bind(now)
-        .bind(sub(now, idle))
+        .bind(secs_i32(idle))
         .execute(&self.pool)
         .await?;
         Ok(res.rows_affected() == 1)
@@ -426,14 +504,17 @@ impl SessionStore {
         idle: Duration,
         refreshed: &Refreshed<'_>,
     ) -> Result<bool, sqlx::Error> {
-        let res = sqlx::query(
+        let iv = idle_interval("$3");
+        let res = sqlx::query(&format!(
             "UPDATE sessions SET last_seen_at = $2, roles = $4, id_token = $5, \
-                    refresh_token = COALESCE($6, refresh_token) \
-             WHERE id_hash = $1 AND absolute_expires_at > $2 AND last_seen_at > $3",
-        )
+                    refresh_token = COALESCE($6, refresh_token), \
+                    idle_expires_at = $2 + {iv}, \
+                    idle_timeout_secs = COALESCE(idle_timeout_secs, $3) \
+             WHERE id_hash = $1 AND absolute_expires_at > $2 AND last_seen_at + {iv} > $2"
+        ))
         .bind(id_hash)
         .bind(now)
-        .bind(sub(now, idle))
+        .bind(secs_i32(idle))
         .bind(refreshed.roles)
         .bind(refreshed.id_token)
         .bind(refreshed.refresh_token)
@@ -442,9 +523,14 @@ impl SessionStore {
         Ok(res.rows_affected() == 1)
     }
 
-    /// Deletes up to `limit` expired sessions and all expired auth requests.
-    /// Two index range scans (`UNION ALL`, each bounded) instead of an `OR`
-    /// across columns (PERF-003); `IN` de-duplicates.
+    /// Deletes up to `limit` expired sessions (tool sessions and launch
+    /// codes cascade), all expired auth requests and launch codes.
+    /// Predicate (POAM-031): `absolute_expires_at <= now OR
+    /// COALESCE(idle_expires_at, last_seen_at + idle) <= now`, as bounded
+    /// index range scans (`UNION ALL`) instead of an `OR` across columns
+    /// (PERF-003); `IN` de-duplicates. `idle` applies to legacy rows only.
+    // COMPLIANCE MAPPING:
+    // - NIST 800-53: AC-12 (Session Termination) — each row expires under its own idle limit
     pub async fn sweep(
         &self,
         now: DateTime<Utc>,
@@ -453,7 +539,10 @@ impl SessionStore {
     ) -> Result<Vec<SweptSession>, sqlx::Error> {
         let swept = sqlx::query_as(
             "DELETE FROM sessions WHERE id_hash IN ( \
-                 (SELECT id_hash FROM sessions WHERE last_seen_at <= $1 LIMIT $3) \
+                 (SELECT id_hash FROM sessions WHERE idle_expires_at <= $2 LIMIT $3) \
+                 UNION ALL \
+                 (SELECT id_hash FROM sessions \
+                  WHERE idle_expires_at IS NULL AND last_seen_at <= $1 LIMIT $3) \
                  UNION ALL \
                  (SELECT id_hash FROM sessions WHERE absolute_expires_at <= $2 LIMIT $3)) \
              RETURNING id_hash, user_sub, username, absolute_expires_at <= $2 AS absolute, \
@@ -468,12 +557,38 @@ impl SessionStore {
             .bind(now)
             .execute(&self.pool)
             .await?;
+        sqlx::query("DELETE FROM tool_launch_codes WHERE expires_at <= $1")
+            .bind(now)
+            .execute(&self.pool)
+            .await?;
         Ok(swept)
     }
 }
 
+/// Connection-class failures (socket closed/reset, TLS, wire desync) that
+/// a fresh pooled connection may not repeat. Only read-only lookups retry
+/// on these; writes never do (they may have been applied).
+pub(crate) fn is_connection_error(e: &sqlx::Error) -> bool {
+    matches!(
+        e,
+        sqlx::Error::Io(_) | sqlx::Error::Tls(_) | sqlx::Error::Protocol(_)
+    )
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn connection_errors_are_retry_class_only() {
+        let io = sqlx::Error::Io(std::io::Error::from(std::io::ErrorKind::ConnectionReset));
+        assert!(super::is_connection_error(&io));
+        assert!(super::is_connection_error(&sqlx::Error::Protocol(
+            "desync".into()
+        )));
+        assert!(!super::is_connection_error(&sqlx::Error::RowNotFound));
+        assert!(!super::is_connection_error(&sqlx::Error::PoolTimedOut));
+        assert!(!super::is_connection_error(&sqlx::Error::PoolClosed));
+    }
+
     use super::*;
     use chrono::TimeZone;
 
@@ -501,6 +616,12 @@ mod tests {
         ] {
             assert!(r.contains(flag), "{r} missing {flag}");
         }
+        let strict = set_cookie_strict("__Host-tool_sid", "t".into(), None);
+        assert!(strict.contains("SameSite=Strict") && strict.contains("HttpOnly"));
+        assert!(!strict.contains("Domain") && !strict.contains("Max-Age"));
+        assert_eq!(idle_or(Some(150), Duration::from_secs(900)).as_secs(), 150);
+        assert_eq!(idle_or(None, Duration::from_secs(900)).as_secs(), 900);
+        assert_eq!(idle_or(Some(0), Duration::from_secs(900)).as_secs(), 900);
         let cleared = clear_cookie(SID_COOKIE);
         assert!(cleared.contains("Max-Age=0") && cleared.contains("Secure"));
     }
