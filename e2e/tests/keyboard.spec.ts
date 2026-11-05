@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { DEMO, TID, gotoApp, query } from "./fixtures";
+import { DEMO, TID, gotoApp, openScope, query } from "./fixtures";
 import { NO_AUTH, loginVia } from "./auth-helpers";
 
 /** WebKit (macOS-style) only tabs to links with Alt held. */
@@ -48,19 +48,32 @@ test.describe("side nav at narrow width", () => {
     await expect(toggle).toBeFocused();
   });
 
-  test("toggle is hidden and nav shown at >= 45rem", async ({ page }) => {
+  test("at >= 45rem the toggle collapses the rail instead of hiding it (M4.5)", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 });
     await gotoApp(page, "/");
-    await expect(page.getByTestId(TID.navToggle)).toBeHidden();
-    await expect(page.locator("#side-nav-region")).toBeVisible();
+    const toggle = page.getByTestId(TID.navToggle);
+    const region = page.locator("#side-nav-region");
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(toggle).toHaveAccessibleName("Collapse navigation");
+    await expect(region).toBeVisible();
+    await expect(region).toHaveAttribute("data-rail", "expanded");
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(toggle).toHaveAccessibleName("Expand navigation");
+    await expect(region).toHaveAttribute("data-rail", "collapsed");
+    await expect(region.getByTestId(TID.sideNav)).toBeVisible();
+    await toggle.click();
+    await expect(region).toHaveAttribute("data-rail", "expanded");
   });
 });
 
-test.describe("service menu (disclosure)", () => {
+test.describe("user menu (disclosure; was the removed service menu)", () => {
   test("open, arrows wrap, Escape returns focus, Tab closes", async ({ page, browserName }) => {
     await gotoApp(page, "/");
-    const button = page.getByTestId(TID.serviceMenuButton);
-    const panel = page.getByTestId(TID.serviceMenuPanel);
+    await expect(page.getByTestId("user-menu-loading")).toHaveCount(0);
+    const button = page.getByTestId(TID.userMenuButton);
+    const panel = page.getByTestId(TID.userMenuPanel);
     await expect(button).toHaveAttribute("aria-expanded", "false");
     await expect(panel).toBeHidden();
     const controls = await button.getAttribute("aria-controls");
@@ -111,12 +124,12 @@ test.describe("service menu (disclosure)", () => {
 
   test("outside click closes", async ({ page }) => {
     await gotoApp(page, "/");
-    await page.getByTestId(TID.serviceMenuButton).click();
-    await expect(page.getByTestId(TID.serviceMenuPanel)).toBeVisible();
+    await page.getByTestId(TID.userMenuButton).click();
+    await expect(page.getByTestId(TID.userMenuPanel)).toBeVisible();
     // Click empty space away from the panel (bottom-left of the viewport).
     const vp = page.viewportSize() ?? { width: 1280, height: 720 };
     await page.mouse.click(vp.width - 10, vp.height - 10);
-    await expect(page.getByTestId(TID.serviceMenuPanel)).toBeHidden();
+    await expect(page.getByTestId(TID.userMenuPanel)).toBeHidden();
   });
 });
 
@@ -138,22 +151,46 @@ test.describe("user menu and search", () => {
     await ctx.close();
   });
 
-  test("search submit shows fixed info flash and never echoes the query", async ({ page }) => {
+  test("palette query is never echoed outside the palette, URL, storage or network (replaces global search)", async ({ page }) => {
+    const needle = "needle-xyz<b>";
+    const sent: string[] = [];
+    page.on("request", (r) => sent.push(`${r.url()} ${r.postData() ?? ""}`));
     await gotoApp(page, "/");
-    const input = page.getByTestId(TID.search).getByRole("searchbox");
-    await input.fill("needle-xyz<b>");
-    await input.press("Enter");
-    await expect(page.getByTestId(TID.flashbar)).toContainText("Search is not available yet");
-    await expect(page.locator("body")).not.toContainText("needle-xyz");
-    expect(page.url()).not.toContain("needle");
+    const trigger = page.getByTestId(TID.paletteTrigger);
+    await trigger.focus();
+    await page.keyboard.press("ControlOrMeta+k");
+    const input = page.getByTestId(TID.paletteInput);
+    await expect(input).toBeFocused();
     await expect(input).toHaveAttribute("maxlength", "256");
+    await input.fill(needle);
+    await expect(page.getByTestId(TID.paletteEmpty)).toBeVisible();
+    // The query is a text node only (no <b> element created from it).
+    await expect(page.getByTestId(TID.paletteEmpty).locator("b")).toHaveCount(0);
+    // Outside the palette nothing contains it.
+    const outside = await page.evaluate(() => {
+      const pal = document.querySelector('[data-testid="command-palette"]');
+      const clone = document.body.cloneNode(true) as HTMLElement;
+      clone.querySelector('[data-testid="command-palette"]')?.remove();
+      return { text: clone.textContent ?? "", hasPalette: !!pal };
+    });
+    expect(outside.hasPalette).toBe(true);
+    expect(outside.text).not.toContain("needle-xyz");
+    expect(page.url()).not.toContain("needle");
+    const storage = await page.evaluate(() => JSON.stringify({ l: { ...localStorage }, s: { ...sessionStorage }, h: history.state }));
+    expect(storage).not.toContain("needle");
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId(TID.palette)).toBeHidden();
+    await expect(trigger).toBeFocused();
+    await expect(page.locator("body")).not.toContainText("needle-xyz");
+    expect(sent.filter((x) => x.includes("needle"))).toEqual([]);
   });
 });
 
 test.describe("scope picker keyboard", () => {
   test("choose site via keyboard; URL updates, reload keeps it, Back restores", async ({ page }) => {
     await gotoApp(page, "/");
-    const site = page.getByTestId(TID.site);
+    const site = await openScope(page, "site");
+    await expect(site).toBeFocused(); // focus moves into the popover on open
     await site.focus();
     await expect(site).toBeFocused();
     await site.selectOption(DEMO.multiSite);
@@ -161,6 +198,7 @@ test.describe("scope picker keyboard", () => {
 
     await page.reload();
     await expect(page.getByTestId(TID.site)).toHaveValue(DEMO.multiSite);
+    await expect(page.getByTestId("scope-site-trigger")).toContainText("Headquarters");
 
     await page.goBack();
     await expect.poll(() => query(page)["site"]).toBeUndefined();

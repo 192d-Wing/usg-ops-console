@@ -1,6 +1,6 @@
 import { expect } from "@playwright/test";
 import { ORIGINS } from "../playwright.config";
-import { DEMO, TID, flashbar } from "./fixtures";
+import { DEMO, TID, flashbar, openScope } from "./fixtures";
 import { SID_COOKIE, USERS, expectAxeClean, getSession } from "./auth-helpers";
 import { dbNow, sessionRef, toolAuditSince, toolSessionCount } from "./db-helpers";
 import {
@@ -22,7 +22,7 @@ import {
 // projects (console_user: console-user + hello:user). The hello tool lives on
 // its own origin (ORIGINS.hello) served by the main gateway.
 
-test.describe("service menu and launch", () => {
+test.describe("rail and launch", () => {
   test("/api/tools lists permitted tools only, no upstream, no-store", async ({ request }) => {
     const r = await request.get("/api/tools", { headers: { Accept: "application/json" } });
     expect(r.status()).toBe(200);
@@ -36,14 +36,14 @@ test.describe("service menu and launch", () => {
     expect(JSON.stringify(body)).not.toMatch(/upstream|127\.0\.0\.1:\d+|forward_/);
   });
 
-  test("launch via the service menu: tool origin iframe, identity verified by the tool matches the user", async ({ page }) => {
+  test("launch via the rail: tool origin iframe, identity verified by the tool matches the user", async ({ page }) => {
     await page.goto("/");
-    await page.getByTestId(TID.serviceMenuButton).click();
-    const panel = page.getByTestId(TID.serviceMenuPanel);
-    await expect(panel.getByTestId("service-menu-item-tool-denied")).toHaveCount(0);
-    await expect(panel.getByTestId("service-menu-item-tool-hello")).toHaveAttribute("href", "/tools/hello/");
+    const panel = page.getByTestId(TID.sideNav);
+    await expect(panel.getByTestId("rail-item-tool-hello")).toBeVisible();
+    await expect(page.getByTestId("rail-item-tool-denied")).toHaveCount(0);
+    await expect(panel.getByTestId("rail-item-tool-hello")).toHaveAttribute("href", "/tools/hello/");
     const launched = page.waitForResponse((r) => r.url().endsWith("/api/tools/hello/launch") && r.request().method() === "POST");
-    await panel.getByTestId("service-menu-item-tool-hello").click();
+    await panel.getByTestId("rail-item-tool-hello").click();
     expect((await launched).status()).toBe(200);
     await expect(page).toHaveURL(/\/tools\/hello\/?$/);
 
@@ -92,10 +92,10 @@ test.describe("service menu and launch", () => {
   test("scope and theme propagate without reloading the tool; ctx reaches the server", async ({ page }) => {
     const f = await openTool(page, "hello", "/");
     const visits = await f.getByTestId(HELLO_TID.visits).textContent();
-    await page.getByTestId(TID.site).selectOption(DEMO.multiSite);
+    await (await openScope(page, "site")).selectOption(DEMO.multiSite);
     await expect(f.getByTestId(HELLO_TID.site)).toHaveText(DEMO.multiSite);
     await expect(f.getByTestId(HELLO_TID.ctx)).toContainText(`"site":"${DEMO.multiSite}"`);
-    await page.getByTestId(TID.tenant).selectOption(DEMO.sharedTenant);
+    await (await openScope(page, "tenant")).selectOption(DEMO.sharedTenant);
     await expect(f.getByTestId(HELLO_TID.tenant)).toHaveText(DEMO.sharedTenant);
     const before = (await page.locator("html").getAttribute("data-theme")) ?? "light";
     const after = before === "dark" ? "light" : "dark";

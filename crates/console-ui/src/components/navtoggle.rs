@@ -1,3 +1,4 @@
+use super::icon::{Icon, IconName};
 use yew::prelude::*;
 
 #[derive(Properties, PartialEq)]
@@ -9,6 +10,9 @@ pub struct NavToggleProps {
     /// Accessible name (the button shows only an icon).
     #[prop_or(AttrValue::Static("Navigation"))]
     pub label: AttrValue,
+    /// Glyph (e.g. `Collapse`/`Expand` for the wide rail, `Menu` for the drawer).
+    #[prop_or(IconName::Menu)]
+    pub icon: IconName,
 }
 
 /// Icon button that toggles a navigation region. Visibility of the button and
@@ -26,7 +30,7 @@ pub fn NavToggle(p: &NavToggleProps) -> Html {
             data-testid="nav-toggle"
             {onclick}
         >
-            <span class="cui-navtoggle__icon" aria-hidden="true"></span>
+            <Icon name={p.icon} />
         </button>
     }
 }

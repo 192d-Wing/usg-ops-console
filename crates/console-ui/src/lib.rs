@@ -1,4 +1,5 @@
-//! Console component library (Cloudscape-like) shared by the shell and tools.
+//! Console component library ("calm neutral" design) shared by the shell and
+//! tools.
 //!
 //! Styling lives in two static stylesheets shipped with this crate:
 //! `assets/tokens.css` (CSS custom properties, light + dark) and
@@ -10,7 +11,7 @@ pub mod id;
 pub mod logic;
 
 pub use components::*;
-pub use logic::Theme;
+pub use logic::{RAIL_STORAGE_KEY, RailMode, Theme};
 
 /// Design tokens stylesheet, for tools that copy it into their own dist.
 pub const TOKENS_CSS: &str = include_str!("../assets/tokens.css");

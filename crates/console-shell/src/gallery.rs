@@ -104,6 +104,8 @@ pub fn Gallery() -> Html {
     let selected = use_state(|| vec![AttrValue::Static("svc-1")]);
     let tab = use_state(|| AttrValue::Static("overview"));
     let modal = use_state(|| false);
+    let pop_open = use_state_eq(|| false);
+    let pop_anchor = use_node_ref();
     let loading = use_state(|| false);
 
     let flash_btn = |kind: AlertKind, label: &'static str, msg: &'static str| {
@@ -345,6 +347,66 @@ pub fn Gallery() -> Html {
         </Grid>
     };
 
+    // M4.5 shell building blocks (the live ones are in the chrome).
+    let icons = [
+        IconName::Home,
+        IconName::Tool,
+        IconName::Grid,
+        IconName::Gallery,
+        IconName::Settings,
+        IconName::Search,
+        IconName::Sun,
+        IconName::Moon,
+        IconName::Monitor,
+        IconName::User,
+        IconName::ChevronRight,
+        IconName::ChevronDown,
+        IconName::Collapse,
+        IconName::Expand,
+        IconName::Menu,
+        IconName::Close,
+        IconName::SignOut,
+        IconName::Mark,
+    ];
+    let pop_toggle = {
+        let o = pop_open.clone();
+        Callback::from(move |_: MouseEvent| o.set(!*o))
+    };
+    let pop_close = {
+        let o = pop_open.clone();
+        Callback::from(move |()| o.set(false))
+    };
+    let shell_parts = html! {
+        <Grid cols={2}>
+            <SpaceBetween>
+                <p data-testid="gallery-icons">
+                    { for icons.into_iter().map(|i| html! { <Icon name={i} /> }) }
+                </p>
+                <div class="scope-crumbs__item">
+                    <button type="button" class="cui-scope-crumbs__seg" ref={pop_anchor.clone()}
+                        aria-haspopup="dialog" aria-expanded={if *pop_open { "true" } else { "false" }}
+                        aria-controls="gallery-popover" data-testid="gallery-popover-trigger"
+                        onclick={pop_toggle}>
+                        { "Popover" }<Icon name={IconName::ChevronDown} />
+                    </button>
+                    <Popover id="gallery-popover" open={*pop_open} on_close={pop_close}
+                        anchor={pop_anchor} label={AttrValue::Static("Sample popover")}
+                        testid={AttrValue::Static("gallery-popover")}>
+                        <p>{ "Escape or a click outside closes this; focus returns to the trigger." }</p>
+                        <Button>{ "Focusable" }</Button>
+                    </Popover>
+                </div>
+            </SpaceBetween>
+            <Rail aria_label="Gallery sample rail (collapsed)" collapsed=true
+                active_href={Some(AttrValue::Static("/gallery"))}
+                items={vec![
+                    RailEntry::Link(RailItem::new("Home", "/").icon(IconName::Home)),
+                    RailEntry::Link(RailItem::new("Gallery", "/gallery").icon(IconName::Gallery)),
+                    RailEntry::Link(RailItem::new("Monogram tool", "/")),
+                ]} />
+        </Grid>
+    };
+
     let layout = html! {
         <SpaceBetween>
             <Grid cols={4}>
@@ -377,6 +439,7 @@ pub fn Gallery() -> Html {
                 { section("g-tabs", "Tabs", tabs) }
                 { section("g-modal", "Modal", modals) }
                 { section("g-nav", "Navigation", navigation) }
+                { section("g-shell", "Icons, popover and rail", shell_parts) }
                 { section("g-layout", "Layout", layout) }
             </SpaceBetween>
             { modal_portal }

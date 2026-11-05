@@ -9,6 +9,8 @@ mod demo;
 #[cfg(feature = "gallery")]
 mod gallery;
 mod idle;
+mod palette;
+mod rail;
 mod scope;
 mod session;
 mod theme;
@@ -22,17 +24,18 @@ use tools::ToolsCtx;
 
 use console_protocol::Scope;
 use console_ui::{
-    AlertKind, Breadcrumbs, Container, FlashId, FlashItem, Flashbar, Header, HeaderVariant,
-    NavLink, NavToggle, SideNavItem, SideNavigation, TopNavigation, flash_dismiss, flash_push,
+    AlertKind, Breadcrumbs, CommandPalette, Container, FlashId, FlashItem, Flashbar, Header,
+    HeaderVariant, Icon, IconName, NavToggle, Rail, RailEntry, RailItem, TopNavigation,
+    flash_dismiss, flash_push,
 };
 use std::rc::Rc;
 use yew::prelude::*;
 use yew_router::history::{BrowserHistory, History};
 use yew_router::prelude::*;
 
-/// Id of the side navigation wrapper (target of the nav toggle).
+/// Id of the rail wrapper (target of the nav toggle; F6 and E2E rely on it).
 pub const SIDE_NAV_REGION_ID: &str = "side-nav-region";
-/// Width at and above which the side nav is always shown (A11Y-008).
+/// Width at and above which the rail is always shown (A11Y-008).
 const NAV_BREAKPOINT: &str = "(min-width: 45rem)";
 
 /// Shell routes. `Routable` is implemented by hand (not derived) so the
@@ -156,7 +159,7 @@ fn switch(route: Route) -> Html {
     match route {
         Route::Home => html! {
             <Container header={html! { <h2>{ "Welcome" }</h2> }}>
-                <p>{ "Open a tool from the Services menu or the side navigation." }</p>
+                <p>{ "Open a tool from the navigation, or press Ctrl+K (\u{2318}K on a Mac) to search the console." }</p>
             </Container>
         },
         Route::Tool { id } | Route::ToolPath { id, .. } => html! {
@@ -185,20 +188,33 @@ fn ThemeToggle(props: &ThemeToggleProps) -> Html {
         let pref = props.pref;
         let on_change = props.on_change.clone();
         let on_error = props.on_error.clone();
-        Callback::from(move |_: MouseEvent| {
-            let next = theme::next(pref);
-            if let Err(e) = theme::save(next) {
-                on_error.emit((AlertKind::Warning, format!("Theme not saved: {e}").into()));
-            }
-            on_change.emit(next);
-        })
+        Callback::from(move |_: MouseEvent| choose_theme(theme::next(pref), &on_change, &on_error))
+    };
+    let icon = match props.pref {
+        theme::ThemePref::Light => IconName::Sun,
+        theme::ThemePref::Dark => IconName::Moon,
+        theme::ThemePref::System => IconName::Monitor,
     };
     html! {
         <button type="button" class="topbar__theme" data-testid="theme-toggle"
             title="Cycle theme: system, light, dark" {onclick}>
-            { theme::label(props.pref) }
+            <Icon name={icon} />
+            <span class="topbar__theme-label">{ theme::label(props.pref) }</span>
         </button>
     }
+}
+
+/// Save (warning on failure) and apply a theme choice. Shared by the toggle
+/// and the command palette, so both broadcast the same `ThemeChanged`.
+fn choose_theme(
+    next: theme::ThemePref,
+    on_change: &Callback<theme::ThemePref>,
+    on_error: &Callback<(AlertKind, AttrValue)>,
+) {
+    if let Err(e) = theme::save(next) {
+        on_error.emit((AlertKind::Warning, format!("Theme not saved: {e}").into()));
+    }
+    on_change.emit(next);
 }
 
 /// Theme preference, applied to `<html data-theme>` and shared with tools
@@ -217,16 +233,104 @@ fn use_theme(
     (*pref, set)
 }
 
-fn nav_items(tools: &tools::ToolsState, active_tool: Option<&str>) -> Vec<SideNavItem> {
+fn nav_items(tools: &tools::ToolsState, active_tool: Option<&str>) -> Vec<RailEntry> {
     #[allow(unused_mut)]
-    let mut items = vec![SideNavItem::Link(NavLink::new("Home", "/"))];
+    let mut items = vec![RailEntry::Link(
+        RailItem::new("Home", "/")
+            .icon(IconName::Home)
+            .testid("rail-item-home"),
+    )];
     items.extend(tools::nav_sections(tools, active_tool));
     #[cfg(feature = "gallery")]
-    items.push(SideNavItem::Section {
+    items.push(RailEntry::Section {
         text: "Developer".into(),
-        items: vec![NavLink::new("Component gallery", "/gallery")],
+        items: vec![
+            RailItem::new("Component gallery", "/gallery")
+                .icon(IconName::Gallery)
+                .testid("rail-item-gallery"),
+        ],
     });
     items
+}
+
+/// "⌘K" on Apple platforms, "Ctrl K" elsewhere. Cosmetic only: both combos
+/// work everywhere. Read through `Reflect` so no extra web-sys feature is
+/// needed.
+fn shortcut_hint() -> &'static str {
+    let platform = web_sys::window()
+        .and_then(|w| js_sys::Reflect::get(&w, &"navigator".into()).ok())
+        .and_then(|n| js_sys::Reflect::get(&n, &"platform".into()).ok())
+        .and_then(|p| p.as_string())
+        .unwrap_or_default();
+    if platform.starts_with("Mac") || platform.starts_with("iP") {
+        "\u{2318}K"
+    } else {
+        "Ctrl K"
+    }
+}
+
+/// Id of the palette trigger (focus fallback when the opener is gone).
+const PALETTE_TRIGGER_ID: &str = "palette-trigger";
+
+/// Ctrl+K / Cmd+K, nothing else (no Shift/Alt; `/` is deliberately unbound).
+fn is_palette_combo(e: &KeyboardEvent) -> bool {
+    (e.ctrl_key() || e.meta_key())
+        && !e.alt_key()
+        && !e.shift_key()
+        && e.key().eq_ignore_ascii_case("k")
+}
+
+/// Document keydown listener for the palette shortcut. It only sees keys
+/// typed in the shell document; inside a tool frame the keystroke stays with
+/// the tool (brief decision, no protocol change). Ignored while the idle
+/// dialog or another modal (chrome made inert) is open.
+#[hook]
+fn use_palette_shortcut(
+    open: bool,
+    set_open: UseStateSetter<bool>,
+    flash: Callback<(AlertKind, AttrValue)>,
+) {
+    // Mirror read by the long-lived listener (a captured handle would be stale).
+    let cur = use_mut_ref(|| open);
+    *cur.borrow_mut() = open;
+    use_effect_with((), move |_| {
+        use web_sys::wasm_bindgen::{JsCast, closure::Closure};
+        let doc = web_sys::window().and_then(|w| w.document());
+        let cb = Closure::<dyn Fn(KeyboardEvent)>::new(move |e: KeyboardEvent| {
+            if !is_palette_combo(&e) || e.default_prevented() || e.repeat() {
+                return;
+            }
+            let modal_open = activity::idle_dialog_open()
+                || document()
+                    .ok()
+                    .and_then(|d| d.get_element_by_id(APP_CHROME_ID))
+                    .is_some_and(|c| c.has_attribute("inert"));
+            // Our own palette also makes the chrome inert; the combo then closes it.
+            if *cur.borrow() {
+                e.prevent_default();
+                set_open.set(false);
+            } else if !modal_open {
+                e.prevent_default();
+                set_open.set(true);
+            }
+        });
+        let registered = doc.as_ref().is_some_and(|d| {
+            d.add_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref())
+                .is_ok()
+        });
+        if !registered {
+            flash.emit((
+                AlertKind::Warning,
+                "Keyboard shortcut Ctrl+K is unavailable; use the Search button".into(),
+            ));
+        }
+        move || {
+            if let Some(d) = doc {
+                let _ =
+                    d.remove_event_listener_with_callback("keydown", cb.as_ref().unchecked_ref());
+            }
+        }
+    });
 }
 
 /// Forces `url` (path + query/hash) to be same-origin-relative: a run of
@@ -691,14 +795,45 @@ fn Shell() -> Html {
         });
     }
 
-    // --- Side navigation collapse below 45rem (A11Y-008).
     let (session_state, session_ctx, keepalive_error) = use_session(flash.clone());
+    // --- Command palette (plan 4.2). Not mounted until first opened.
+    let palette_open = use_state_eq(|| false);
+    let idle_open = use_state_eq(|| false);
+    use_palette_shortcut(*palette_open, palette_open.setter(), flash.clone());
+    let on_idle_open = use_callback(
+        (palette_open.setter(), idle_open.setter()),
+        |open: bool, (set_palette, set_idle)| {
+            // The idle warning wins: close the palette first.
+            if open {
+                set_palette.set(false);
+            }
+            set_idle.set(open);
+        },
+    );
+    {
+        // The palette's close clears `inert` on the chrome; if the idle
+        // dialog is what closed it, put the idle dialog's inert back (this
+        // effect runs after the palette's cleanup).
+        let flash = flash.clone();
+        use_effect_with((*palette_open, *idle_open), move |(p, idle)| {
+            if !*p && *idle {
+                let ok = document()
+                    .ok()
+                    .and_then(|d| d.get_element_by_id(APP_CHROME_ID))
+                    .is_some_and(|c| c.set_attribute("inert", "").is_ok());
+                if !ok {
+                    flash.emit((AlertKind::Error, "Could not make the page inert".into()));
+                }
+            }
+        });
+    }
     let idle_watch = match &session_state {
         SessionState::Ready { info, received_at } => html! {
             <idle::IdleWatch session={info.clone()} received_at={*received_at}
                 busy={session_ctx.busy} {keepalive_error}
                 on_keepalive={session_ctx.keepalive.clone()}
-                on_sign_out={session_ctx.sign_out.clone()} flash={flash.clone()} />
+                on_sign_out={session_ctx.sign_out.clone()} flash={flash.clone()}
+                on_open_change={on_idle_open} />
         },
         // Same (empty) live region, so it exists before any announcement.
         _ => html! {
@@ -707,9 +842,13 @@ fn Shell() -> Html {
         },
     };
 
+    // --- Rail: collapsible at >= 45rem (persisted), a drawer below
+    // (A11Y-008, as in M2).
     let wide = use_wide(flash.clone());
+    let rail_mode = use_state_eq(rail::load);
     let nav_open = use_state(|| false);
     let nav_hidden = !wide && !*nav_open;
+    let collapsed = wide && *rail_mode == rail::RailMode::Collapsed;
     {
         let open = *nav_open && !wide;
         use_effect_with(open, |open| {
@@ -720,7 +859,36 @@ fn Shell() -> Html {
     }
     let on_toggle = {
         let nav_open = nav_open.clone();
-        Callback::from(move |_| nav_open.set(!*nav_open))
+        let rail_mode = rail_mode.clone();
+        Callback::from(move |_| {
+            if wide {
+                let next = rail::toggled(*rail_mode);
+                rail::save(next);
+                rail_mode.set(next);
+            } else {
+                nav_open.set(!*nav_open);
+            }
+        })
+    };
+    let close_drawer = {
+        let nav_open = nav_open.clone();
+        Callback::from(move |_: MouseEvent| {
+            nav_open.set(false);
+            focus_selector("[data-testid=\"nav-toggle\"]");
+        })
+    };
+    let (toggle_expanded, toggle_label, toggle_icon) = if wide {
+        (
+            !collapsed,
+            rail::toggle_label(*rail_mode),
+            if collapsed {
+                IconName::Expand
+            } else {
+                IconName::Collapse
+            },
+        )
+    } else {
+        (!nav_hidden, "Navigation", IconName::Menu)
     };
     let on_nav_key = {
         let nav_open = nav_open.clone();
@@ -777,6 +945,78 @@ fn Shell() -> Html {
         }
     });
     let side_items = nav_items(&tools_ctx.state, active_tool.as_deref());
+
+    // Scope popover (owned here so the palette can open a segment).
+    let scope_open = use_state_eq(|| None::<palette::Seg>);
+    let on_scope_open = use_callback(scope_open.setter(), |seg, set| set.set(seg));
+
+    // Palette items: rebuilt from what the shell already holds, only while
+    // open. No network call and no storage; the query never leaves the
+    // component.
+    let signed_in = session_ctx.session.is_some();
+    // `palette_open` first, and the heavier deps only while open, so a
+    // closed palette compares two `None`s per Shell render (PERF-004).
+    let open_now = *palette_open;
+    let palette_items = use_memo(
+        (
+            open_now,
+            open_now.then(|| tools_ctx.state.clone()),
+            open_now.then(|| scope.clone()),
+            theme_pref,
+            signed_in,
+        ),
+        |(_, tools, scope, theme, signed_in)| {
+            let (Some(tools), Some(scope)) = (tools, scope) else {
+                return Rc::new(Vec::new());
+            };
+            Rc::new(palette::to_items(palette::entries(&palette::Sources {
+                tools,
+                scope,
+                theme: *theme,
+                signed_in: *signed_in,
+            })))
+        },
+    );
+    let on_palette_select = {
+        let set_open = palette_open.setter();
+        let set_nav = nav_open.setter();
+        let set_scope = scope_open.setter();
+        let tools_state = tools_ctx.state.clone();
+        let reload = tools_ctx.reload.clone();
+        let set_theme = set_theme.clone();
+        let sign_out = session_ctx.sign_out.clone();
+        let flash = flash.clone();
+        let q = scope::to_query("", &scope);
+        Callback::from(move |id: AttrValue| {
+            // Close on every select: the palette has already lifted `inert`,
+            // so it must not stay open over a live chrome (SEC-001).
+            let Some(action) = resolve_palette_select(
+                &id,
+                &tools_state,
+                || set_open.set(false),
+                |kind, msg| flash.emit((kind, msg)),
+            ) else {
+                return;
+            };
+            match action {
+                // Same route check and scope-preserving URL as `onfollow`.
+                palette::Action::Navigate(href) => {
+                    if Route::recognize(&href).is_some() {
+                        set_nav.set(false);
+                        let path = href.split(['?', '#']).next().unwrap_or("/");
+                        history_go(&format!("{path}{q}"), false);
+                    }
+                }
+                palette::Action::OpenScope(seg) => set_scope.set(Some(seg)),
+                palette::Action::Theme(t) => choose_theme(t, &set_theme, &flash),
+                palette::Action::SignOut => sign_out.emit(()),
+                palette::Action::RetryTools => reload.emit(()),
+            }
+        })
+    };
+    let on_palette_close = use_callback(palette_open.setter(), |(), set| set.set(false));
+    let open_palette = use_callback(palette_open.setter(), |_: MouseEvent, set| set.set(true));
+    let on_palette_error = flash.reform(|e: AttrValue| (AlertKind::Error, e));
     let active_href: Option<AttrValue> = route.map(|r| r.to_path().into());
     let ctx = use_memo((flash.clone(), set_page), |(flash, set_page)| ShellCtx {
         flash: flash.clone(),
@@ -793,16 +1033,30 @@ fn Shell() -> Html {
                 <a class="skip-link" href="#main-content">{ "Skip to main content" }</a>
                 { for skip_to_tool }
                 <TopNavigation
-                    brand={html! { <a href="/" onclick={brand_click}>{ "USG Ops Console" }</a> }}
-                    start={html! {
-                        <>
-                            <span class="nav-toggle-slot">
-                                <NavToggle expanded={!nav_hidden} controls={SIDE_NAV_REGION_ID} {on_toggle} />
-                            </span>
-                            <chrome::ServiceMenu onfollow={onfollow.clone()} />
-                        </>
+                    brand={html! {
+                        <a class="cui-brand topbar__brand" href="/" onclick={brand_click}>
+                            <Icon name={IconName::Mark} class={classes!("cui-brand__mark")} />
+                            <span class="topbar__brand-name">{ "USG Ops Console" }</span>
+                        </a>
                     }}
-                    search={html! { <chrome::GlobalSearch flash={flash.clone()} /> }}
+                    start={html! {
+                        <NavToggle expanded={toggle_expanded} controls={SIDE_NAV_REGION_ID}
+                            label={AttrValue::Static(toggle_label)} icon={toggle_icon} {on_toggle} />
+                    }}
+                    search={html! {
+                        <button type="button" class="cui-palette-trigger" id={PALETTE_TRIGGER_ID}
+                            data-testid="palette-trigger" aria-haspopup="dialog"
+                            aria-keyshortcuts="Meta+K Control+K" onclick={open_palette}>
+                            <Icon name={IconName::Search} />
+                            // Visible text is the accessible name; below 30rem
+                            // only the icon shows and this stays as hidden text.
+                            <span class="cui-palette-trigger__label">{ "Search\u{2026}" }</span>
+                            <kbd class="cui-kbd cui-palette-trigger__kbd" aria-hidden="true">{ shortcut_hint() }</kbd>
+                        </button>
+                    }}
+                    scope={html! {
+                        <chrome::ScopePicker {wide} open={*scope_open} on_open={on_scope_open} />
+                    }}
                     utilities={html! {
                         <>
                             <ThemeToggle pref={theme_pref} on_change={set_theme} on_error={flash.clone()} />
@@ -810,20 +1064,17 @@ fn Shell() -> Html {
                         </>
                     }}
                 />
-                <div class="scopebar">
-                    <chrome::ScopePicker />
-                    <span class="scopebar__meta">
-                        { format!("SDK protocol v{}", console_protocol::PROTOCOL_VERSION) }
-                    </span>
-                </div>
                 <div class="shell-flash" data-testid="shell-flashbar">
                     <Flashbar items={flashes.items.clone()} {on_dismiss} fallback_focus_id="main-content" />
                 </div>
                 <div class="layout">
-                    <div class="sidenav-region" id={SIDE_NAV_REGION_ID} hidden={nav_hidden}
+                    <div class="rail-region" id={SIDE_NAV_REGION_ID} hidden={nav_hidden}
+                        data-rail={if collapsed { "collapsed" } else { "expanded" }}
                         onkeydown={on_nav_key}>
-                        <SideNavigation aria_label="Console" items={side_items}
-                            {active_href} onfollow={Some(onfollow.clone())} />
+                        <div class="rail-region__sticky">
+                            <Rail items={side_items} {active_href} {collapsed}
+                                onfollow={Some(onfollow.clone())} />
+                        </div>
                     </div>
                     <main class="content" id="main-content" tabindex="-1">
                         <div class="page-crumbs" data-testid="breadcrumbs">
@@ -836,9 +1087,20 @@ fn Shell() -> Html {
                         </div>
                         <Switch<Route> render={switch} />
                     </main>
+                    // Drawer scrim (narrow only). Pointer convenience; the
+                    // keyboard path is Escape / the toggle.
+                    if !wide && *nav_open {
+                        <div class="rail-scrim" aria-hidden="true" onclick={close_drawer}
+                            data-testid="rail-scrim"></div>
+                    }
                 </div>
             </div>
             <div id="modal-root" />
+            <CommandPalette open={*palette_open} items={(*palette_items).clone()}
+                on_select={on_palette_select} on_close={on_palette_close}
+                inert_root={AttrValue::Static(APP_CHROME_ID)}
+                fallback_focus={vec![AttrValue::Static(PALETTE_TRIGGER_ID), AttrValue::Static("main-content")]}
+                on_error={on_palette_error} />
             { idle_watch }
         </ContextProvider<ThemeCtx>>
         </ContextProvider<ToolsCtx>>
@@ -861,9 +1123,68 @@ fn main() {
     yew::Renderer::<App>::new().render();
 }
 
+/// Palette select step shared by the shell callback and its tests: always
+/// close first (SEC-001: `inert` is already lifted), then resolve; an id that
+/// no longer resolves (e.g. tools reloaded) surfaces a warning flash.
+fn resolve_palette_select(
+    id: &str,
+    tools: &tools::ToolsState,
+    close: impl FnOnce(),
+    flash: impl FnOnce(AlertKind, AttrValue),
+) -> Option<palette::Action> {
+    close();
+    let action = palette::resolve(id, tools);
+    if action.is_none() {
+        flash(
+            AlertKind::Warning,
+            "That item is no longer available. Open the palette to try again.".into(),
+        );
+    }
+    action
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn palette_select_unresolved_closes_and_warns() {
+        use std::cell::{Cell, RefCell};
+        let stale = String::from("tool-gone");
+        for (id, tools) in [
+            (
+                stale.as_str(),
+                tools::ToolsState::Ready(Rc::new(Vec::new())),
+            ),
+            (stale.as_str(), tools::ToolsState::Loading),
+            ("not-an-item", tools::ToolsState::Failed),
+        ] {
+            let closed = Cell::new(false);
+            let flashes = RefCell::new(Vec::new());
+            let out = resolve_palette_select(
+                id,
+                &tools,
+                || closed.set(true),
+                |k, m| flashes.borrow_mut().push((k, m)),
+            );
+            assert!(out.is_none(), "{id}");
+            assert!(closed.get(), "palette must close for {id}");
+            let f = flashes.borrow();
+            assert_eq!(f.len(), 1, "{id}");
+            assert!(matches!(f[0].0, AlertKind::Warning));
+            assert!(f[0].1.contains("no longer available"));
+        }
+        // Resolved path: closes, no flash.
+        let closed = Cell::new(false);
+        let out = resolve_palette_select(
+            "sign-out",
+            &tools::ToolsState::Loading,
+            || closed.set(true),
+            |_, _| panic!("no flash on resolve"),
+        );
+        assert!(matches!(out, Some(palette::Action::SignOut)));
+        assert!(closed.get());
+    }
 
     #[test]
     fn same_origin_url_collapses_leading_slashes() {

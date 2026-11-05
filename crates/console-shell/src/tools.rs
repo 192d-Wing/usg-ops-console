@@ -1,12 +1,12 @@
 //! Tool registry view for the shell: `GET /api/tools` once after the session
-//! loads, exposed as [`ToolsCtx`]. Drives the service menu and side nav
-//! (replaces the static M2 list; closes POAM-010). Role filtering is done by
+//! loads, exposed as [`ToolsCtx`]. Drives the icon rail and the command
+//! palette (replaces the static M2 list; closes POAM-010). Role filtering is done by
 //! the gateway; the shell only shows what it was given.
 
 use crate::api;
 use crate::session::origin_of;
 use console_protocol::{Scope, ToolSummary, valid_id, valid_path};
-use console_ui::{AlertKind, DropdownItem, NavLink, SideNavItem};
+use console_ui::{AlertKind, RailEntry, RailItem};
 use std::rc::Rc;
 use yew::prelude::*;
 
@@ -36,9 +36,6 @@ impl ToolsCtx {
         }
     }
 }
-
-/// Dropdown action id for "Retry" in the service menu.
-pub const RETRY_ACTION: &str = "tools-retry";
 
 /// Longest tool title / nav label the chrome displays (chars).
 pub const MAX_LABEL_CHARS: usize = 80;
@@ -109,93 +106,35 @@ pub fn tool_href(id: &str, path: &str) -> String {
     format!("/tools/{id}{path}")
 }
 
-/// Default menu category for tools without one.
-const DEFAULT_CATEGORY: &str = "Tools";
-
-/// Service menu: "Console" home first, then one group per tool category in
-/// first-seen order.
-pub fn service_items(state: &ToolsState) -> Vec<DropdownItem> {
-    let mut out = vec![DropdownItem::Group {
-        text: "Console".into(),
-        items: vec![DropdownItem::Link {
-            id: "home".into(),
-            text: "Console home".into(),
-            href: "/".into(),
-            description: Some("Overview of the console".into()),
-        }],
-    }];
-    match state {
-        // Placeholders are non-interactive notes; only Retry is an action
-        // (A11Y-006, WCAG 4.1.2).
-        ToolsState::Loading => out.push(DropdownItem::Note {
-            id: "tools-loading".into(),
-            text: "Loading tools\u{2026}".into(),
-        }),
-        ToolsState::Failed => out.push(DropdownItem::Action {
-            id: RETRY_ACTION.into(),
-            text: "Tools unavailable. Retry".into(),
-        }),
-        ToolsState::Ready(tools) if tools.is_empty() => out.push(DropdownItem::Note {
-            id: "tools-none".into(),
-            text: "No tools available".into(),
-        }),
-        ToolsState::Ready(tools) => {
-            let cat = |t: &ToolSummary| {
-                t.category
-                    .clone()
-                    .unwrap_or_else(|| DEFAULT_CATEGORY.into())
-            };
-            let mut cats: Vec<String> = Vec::new();
-            for t in tools.iter() {
-                let c = cat(t);
-                if !cats.contains(&c) {
-                    cats.push(c);
-                }
-            }
-            for c in cats {
-                out.push(DropdownItem::Group {
-                    text: c.clone().into(),
-                    items: tools
-                        .iter()
-                        .filter(|t| cat(t) == c)
-                        .map(|t| DropdownItem::Link {
-                            id: format!("tool-{}", t.id).into(),
-                            text: t.title.clone().into(),
-                            href: tool_href(&t.id, &t.entry).into(),
-                            description: None,
-                        })
-                        .collect(),
-                });
-            }
-        }
-    }
-    out
-}
-
-/// Side-nav sections: all tools, plus the active tool's own nav entries.
-pub fn nav_sections(state: &ToolsState, active: Option<&str>) -> Vec<SideNavItem> {
+/// Rail sections: all tools, plus the active tool's own nav entries. Tools
+/// carry no compiled-in icon, so the rail shows a two-letter monogram.
+/// Testids: `rail-item-tool-<id>` (plan section 5).
+pub fn nav_sections(state: &ToolsState, active: Option<&str>) -> Vec<RailEntry> {
     let ToolsState::Ready(tools) = state else {
         return Vec::new();
     };
     if tools.is_empty() {
         return Vec::new();
     }
-    let mut out = vec![SideNavItem::Section {
+    let mut out = vec![RailEntry::Section {
         text: "Tools".into(),
         items: tools
             .iter()
-            .map(|t| NavLink::new(t.title.clone(), tool_href(&t.id, &t.entry)))
+            .map(|t| {
+                RailItem::new(t.title.clone(), tool_href(&t.id, &t.entry))
+                    .testid(format!("rail-item-tool-{}", t.id))
+            })
             .collect(),
     }];
     if let Some(t) = active.and_then(|id| tools.iter().find(|t| t.id == id))
         && !t.nav.is_empty()
     {
-        out.push(SideNavItem::Section {
+        out.push(RailEntry::Section {
             text: t.title.clone().into(),
             items: t
                 .nav
                 .iter()
-                .map(|n| NavLink::new(n.label.clone(), tool_href(&t.id, &n.path)))
+                .map(|n| RailItem::new(n.label.clone(), tool_href(&t.id, &n.path)).sub_page())
                 .collect(),
         });
     }
@@ -346,40 +285,15 @@ mod tests {
     }
 
     #[test]
-    fn menu_groups_by_category() {
-        let mut a = tool("a", "https://a.example");
-        a.category = Some("Ops".into());
-        let b = tool("b", "https://b.example");
-        let items = service_items(&ToolsState::Ready(Rc::new(vec![a, b])));
-        let groups: Vec<String> = items
-            .iter()
-            .filter_map(|i| match i {
-                DropdownItem::Group { text, .. } => Some(text.to_string()),
-                _ => None,
-            })
-            .collect();
-        assert_eq!(groups, ["Console", "Ops", "Tools"]);
-        assert!(matches!(&items[1], DropdownItem::Group { items, .. }
-            if matches!(&items[0], DropdownItem::Link { href, .. } if href == "/tools/a/")));
-        assert!(matches!(
-            service_items(&ToolsState::Failed).last(),
-            Some(DropdownItem::Action { id, .. }) if id == RETRY_ACTION
-        ));
-        assert!(matches!(
-            service_items(&ToolsState::Loading).last(),
-            Some(DropdownItem::Note { .. })
-        ));
-        assert!(matches!(
-            service_items(&ToolsState::Ready(Rc::new(vec![]))).last(),
-            Some(DropdownItem::Note { .. })
-        ));
-    }
-
-    #[test]
     fn nav_includes_active_tool_entries() {
         let t = tool("hello", "https://a.example");
         let st = ToolsState::Ready(Rc::new(vec![t]));
         assert_eq!(nav_sections(&st, None).len(), 1);
+        assert!(
+            matches!(&nav_sections(&st, None)[0], RailEntry::Section { items, .. }
+            if items[0].testid.as_deref() == Some("rail-item-tool-hello")
+                && items[0].href == "/tools/hello/")
+        );
         assert_eq!(nav_sections(&st, Some("hello")).len(), 2);
         assert!(nav_sections(&ToolsState::Loading, None).is_empty());
     }

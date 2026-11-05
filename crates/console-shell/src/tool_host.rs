@@ -1302,7 +1302,7 @@ pub fn ToolHost(p: &ToolHostProps) -> Html {
     let badges = (!state.badges.is_empty()).then(|| html! {
         <ul class="tool-host__badges" aria-label="Tool status" data-testid="tool-badges">
             { for state.badges.iter().map(|(k, c)| html! {
-                <li key={k.clone()}><Badge color={BadgeColor::Blue}>{ format!("{k}: {c}") }</Badge></li>
+                <li key={k.clone()}><Badge color={BadgeColor::Info}>{ format!("{k}: {c}") }</Badge></li>
             }) }
         </ul>
     });

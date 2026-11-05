@@ -115,7 +115,7 @@ jobs:
           echo "release dist is gallery-free"
       - name: Shell WASM gzip size <= 1.5 MB; warn > baseline x1.10 (PERF-001)
         env:
-          WASM_GZ_BASELINE: "204977"  # M4 final (fix round 1, 2026-11-04; +18.3% over M3 accepted, PERF-001); see quality-gates.md
+          WASM_GZ_BASELINE: "240530"  # M4.5 redesign accepted (fix round 3, 2026-11-04; +17.3% over M4 204,977 B, PERF-001 justified); warn > 264,583 B; see quality-gates.md
           WASM_GZ_MAX: "1572864"
         run: |
           size=$(gzip -c crates/console-shell/dist/*.wasm | wc -c | tr -d ' ')

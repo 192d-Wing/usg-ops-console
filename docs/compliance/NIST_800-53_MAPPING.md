@@ -68,7 +68,7 @@ confirmation is outstanding for every M4 row.
 | SC-23 Session authenticity (M4 adds `__Host-tool_sid` and launch codes) | Implemented | M3-M4 |
 | SC-39 Process isolation (tool content on separate browser origins) | Implemented (M4, local evidence) | M4 |
 | SC-28 Protection of information at rest (tokens) | Partial (POAM-015) | M3 |
-| SI-10 Input validation (`safe_href`, theme, scope query, search, `return_to`, OIDC tokens, config) | Implemented | M1-M3 |
+| SI-10 Input validation (`safe_href`, theme, scope query, `return_to`, OIDC tokens, config; M4.5 rail mode allow-list and palette query bound) | Implemented (M4.5 additions: local evidence, not yet run in CI) | M1-M4.5 |
 | SI-11 Error handling | Implemented | M2-M3 |
 | CM-7 Least functionality (gallery and dev realm excluded from release) | Implemented | M1-M3 |
 | SA-11 Developer testing (wasm-bindgen, integration, E2E) | Implemented through M3 (CI). M4: Partial until CI runs (POAM-032, POAM-044) | M2-M4 |
@@ -130,8 +130,12 @@ M4 tools (POAM-010 and POAM-026 closed with local evidence):
   for a not-permitted tool, identical to an unknown id (INT-009), and
   audits `tool.denied` `missing_role`; every proxied request rechecks
   roles and answers 403 if a role was revoked mid-session.
-- The shell service menu is built from `/api/tools` (`crates/console-shell/src/tools.rs`);
-  the static `SERVICES` list is gone.
+- The shell's tool list is built from `/api/tools` (`crates/console-shell/src/tools.rs`);
+  the static `SERVICES` list is gone. Since M4.5 the list appears in the
+  rail and the command palette (the service menu is removed); E2E
+  `tools-norole.spec.ts` asserts zero `rail-item-tool-*` and
+  `palette-option-tool-*` for a user without tool roles (local, not yet
+  run in CI).
 - Upstreams receive identity only from the signed assertion; client
   identity headers are dropped by an allow-list rebuild (`proxy.rs:272`).
 - Tools keep their own RBAC on the assertion `roles` and must authorize
@@ -517,18 +521,49 @@ Tests (native, `crates/console-shell/src/scope.rs` `tests`): `charset`,
 (>2048 bytes) ignores all scope with a fixed message", "percent-encoded valid id
 is not decoded").
 
-### Global search box
+### Command palette query (M4.5; replaces the global search box)
 
-`SearchInput` (`crates/console-ui/src/components/search.rs:33`, annotated
-`SI-10 - input length-bounded (maxlength + truncation)`) sets `maxlength`. The
-shell's `GlobalSearch` (`crates/console-shell/src/chrome.rs`) truncates to 256
-characters and is display-only: submit shows a fixed "Search is not available
-yet" flash and the query is not put in the URL or storage.
+The M2 global search box is removed from the shell. The command palette
+input (`crates/console-ui/src/components/palette.rs`, constant
+`PALETTE_MAX_QUERY = 256`, annotated `NIST 800-53 SI-10: bounded input`)
+sets `maxlength` 256. The query is component state only: it is matched
+against a fixed list of items built by the shell
+(`crates/console-shell/src/palette.rs`) and is never stored, sent, or put
+in the URL or history. Labels and match highlights render as text nodes
+(no raw HTML). A selection resolves through a closed `Action` enum; a tool
+id resolves only by lookup in the loaded `/api/tools` list, never from
+the query text. Ranking results are capped at 50 (`PALETTE_MAX_RESULTS`).
 
-Tests: wasm `search_input_maxlength_and_submit`
-(`crates/console-ui/tests/wasm.rs`, local Chrome only, see POAM-003); E2E
-"search submit shows fixed info flash and never echoes the query"
-(`e2e/tests/keyboard.spec.ts`).
+Tests: shell `palette::tests::resolve_is_closed`,
+`every_enabled_entry_resolves`, `sources_follow_state`,
+`tests::palette_select_unresolved_closes_and_warns`
+(`crates/console-shell/src/main.rs`); console-ui
+`logic::tests::palette_cap_case_and_unicode`; wasm
+`palette_empty_state_is_text_only`; E2E "palette query is never echoed
+outside the palette, URL, storage or network (replaces global search)"
+(`e2e/tests/keyboard.spec.ts`; checks `maxlength=256`, body text, URL,
+local and session storage, `history.state` and every request URL and
+body). Local evidence only (QA round 2); not yet run in CI.
+
+`SearchInput` (`crates/console-ui/src/components/search.rs`, annotated
+`SI-10 - input length-bounded (maxlength + truncation)`) is kept for tools
+but deprecated (removal planned M6). Test: wasm
+`search_input_maxlength_and_submit` (`crates/console-ui/tests/wasm.rs`).
+
+### Rail mode from `localStorage` (M4.5)
+
+`RailMode::parse` (`crates/console-ui/src/logic.rs`, annotated `NIST
+800-53: SI-10 - only allow-listed rail values from localStorage`) accepts
+only `expanded` and `collapsed`. `rail::parse_stored`
+(`crates/console-shell/src/rail.rs`, annotated `SI-10 - stored value passes
+an allow-list`) maps anything else, including a missing value, to the
+default (expanded). The value only selects a CSS class and a
+`data-rail` attribute.
+
+Tests: `logic::tests::rail_mode_parse`; shell
+`rail::tests::stored_value_is_allow_listed`, `storage_key_is_stable`;
+E2E `rail.spec.ts` "invalid stored value … falls back to expanded" (4
+values). Local evidence only (QA round 2); not yet run in CI.
 
 ### `return_to` after sign-in (gateway, M3)
 
@@ -649,6 +684,13 @@ generation, custody and an executed rotation in a real deployment.
 
 **Status: Implemented** (M4 additions with local evidence; accepted
 residual risk for `allow-modals`).
+
+M4.5: unchanged. The redesign does not change the CSP, the tool iframe
+sandbox or `tool_host.rs`; it adds no inline styles (rail widths and the
+tooltip use classes and `attr()`), no `inner_html` and no new
+dependencies (guards `no_inline_styles`, `no_raw_html`,
+`crates/console-ui/tests/guards.rs`). `/auth.css` adds no `url(`, fonts or
+`@import`.
 
 M4: the console CSP `frame-src` is exactly the registry tool origins
 (`'none'` with no tools), not `'self'`. Every tool-origin response also
@@ -788,6 +830,14 @@ SDK wasm `rejects_foreign_origin`, `rejects_wrong_source`,
 postMessage ignored, NIST-007), `tool-security.spec.ts`, `prodlike.spec.ts`
 (cookie tossing from a sibling tool host cannot shadow `__Host-console_sid`;
 Chromium, local).
+
+M4.5: the boundary is unchanged. The Ctrl/Cmd+K palette shortcut is a
+listener on the shell document only (`use_palette_shortcut`,
+`crates/console-shell/src/main.rs`). Key events inside a tool frame stay
+with the tool (another origin), and no SDK message was added to forward
+them (protocol v1 unchanged). E2E: `palette.spec.ts` "theme from the
+palette reaches the tool (ThemeChanged); shortcut inside the tool frame
+does not open the palette" (local, QA round 2; not yet run in CI).
 
 ## SC-39 Process isolation
 

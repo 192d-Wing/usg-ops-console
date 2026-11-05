@@ -237,6 +237,227 @@ pub fn grid_cols(n: u8) -> u8 {
         .unwrap_or(1)
 }
 
+/// localStorage key for the rail preference (per browser profile).
+pub const RAIL_STORAGE_KEY: &str = "usg-console.rail";
+
+/// Wide-viewport rail presentation. Narrow viewports always start hidden.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum RailMode {
+    #[default]
+    Expanded,
+    Collapsed,
+}
+
+impl RailMode {
+    /// Parses an allow-listed stored value; anything else is `None`.
+    // NIST 800-53: SI-10 - only allow-listed rail values from localStorage
+    // are accepted; anything else falls back to the default.
+    pub fn parse(s: &str) -> Option<RailMode> {
+        match s {
+            "expanded" => Some(RailMode::Expanded),
+            "collapsed" => Some(RailMode::Collapsed),
+            _ => None,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RailMode::Expanded => "expanded",
+            RailMode::Collapsed => "collapsed",
+        }
+    }
+
+    pub fn toggled(self) -> RailMode {
+        match self {
+            RailMode::Expanded => RailMode::Collapsed,
+            RailMode::Collapsed => RailMode::Expanded,
+        }
+    }
+}
+
+/// Maximum number of command-palette results shown.
+pub const PALETTE_MAX_RESULTS: usize = 50;
+
+/// How a palette item matched the query; lower is better.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MatchTier {
+    Exact,
+    Prefix,
+    WordPrefix,
+    Substring,
+    Keyword,
+    Subsequence,
+}
+
+/// One ranked result: index into the input, tier, and the byte range of the
+/// label to highlight (contiguous label matches only).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ranked {
+    pub index: usize,
+    pub tier: Option<MatchTier>,
+    pub highlight: Option<(usize, usize)>,
+}
+
+/// Lower-cases `s` and returns it with a map from each folded byte offset to
+/// the original byte offset (so highlights index the original label).
+fn fold(s: &str) -> (String, Vec<usize>) {
+    let mut out = String::with_capacity(s.len());
+    let mut map = Vec::with_capacity(s.len() + 1);
+    for (i, c) in s.char_indices() {
+        for l in c.to_lowercase() {
+            for _ in 0..l.len_utf8() {
+                map.push(i);
+            }
+            out.push(l);
+        }
+    }
+    map.push(s.len());
+    (out, map)
+}
+
+fn is_subsequence(needle: &str, hay: &str) -> bool {
+    let mut h = hay.chars();
+    needle
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .all(|n| h.any(|c| c == n))
+}
+
+/// A palette item with its label and keywords case-folded once (PERF-003):
+/// build with [`fold_palette`] when the item list changes, then rank each
+/// keystroke with [`rank_folded`] without re-allocating per item.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FoldedItem {
+    label: String,
+    map: Vec<usize>,
+    keywords: Vec<String>,
+    group: u8,
+}
+
+/// Folds `(label, keywords, group_order)` items for [`rank_folded`].
+pub fn fold_palette(items: &[(&str, &[&str], u8)]) -> Vec<FoldedItem> {
+    items
+        .iter()
+        .map(|(label, kw, group)| {
+            let (label, map) = fold(label);
+            FoldedItem {
+                label,
+                map,
+                keywords: kw.iter().map(|k| k.to_lowercase()).collect(),
+                group: *group,
+            }
+        })
+        .collect()
+}
+
+/// Scores one folded item against an already folded, trimmed, non-empty
+/// query. Kept out of line so the ranking stays one small function (PERF-002).
+#[inline(never)]
+fn tier_for(q: &str, it: &FoldedItem) -> (Option<MatchTier>, Option<(usize, usize)>) {
+    let (fl, map) = (it.label.as_str(), it.map.as_slice());
+    let span = |start: usize| Some((map[start], map[start + q.len()]));
+    if fl == q {
+        return (Some(MatchTier::Exact), span(0));
+    }
+    if fl.starts_with(q) {
+        return (Some(MatchTier::Prefix), span(0));
+    }
+    let word = fl.match_indices(q).find(|(i, _)| {
+        fl[..*i]
+            .chars()
+            .next_back()
+            .is_some_and(|c| !c.is_alphanumeric())
+    });
+    if let Some((i, _)) = word {
+        return (Some(MatchTier::WordPrefix), span(i));
+    }
+    if let Some(i) = fl.find(q) {
+        return (Some(MatchTier::Substring), span(i));
+    }
+    let token_hit = |t: &str| fl.contains(t) || it.keywords.iter().any(|k| k.contains(t));
+    if q.split_whitespace().all(token_hit) {
+        return (Some(MatchTier::Keyword), None);
+    }
+    if is_subsequence(q, fl) {
+        return (Some(MatchTier::Subsequence), None);
+    }
+    (None, None)
+}
+
+/// Ranks palette items `(label, keywords, group_order)` for `query`.
+///
+/// Order: tier (exact > prefix > word-boundary prefix > substring > keyword >
+/// subsequence), then group order, then label (case-folded), then input
+/// order. An empty query returns every item sorted by group, keeping input
+/// order within a group. Results are capped at [`PALETTE_MAX_RESULTS`].
+pub fn rank_palette(query: &str, items: &[(&str, &[&str], u8)]) -> Vec<Ranked> {
+    rank_folded(query, &fold_palette(items))
+}
+
+/// [`rank_palette`] over items already folded with [`fold_palette`].
+pub fn rank_folded(query: &str, items: &[FoldedItem]) -> Vec<Ranked> {
+    let q = fold(query.trim()).0;
+    let mut out: Vec<Ranked> = items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, it)| {
+            if q.is_empty() {
+                return Some(Ranked {
+                    index,
+                    tier: None,
+                    highlight: None,
+                });
+            }
+            let (tier, highlight) = tier_for(&q, it);
+            tier.map(|t| Ranked {
+                index,
+                tier: Some(t),
+                highlight,
+            })
+        })
+        .collect();
+    // Index tie-break makes the order total, so an unstable sort is
+    // deterministic and keeps input order for equal keys (PERF-002).
+    let label = |r: &Ranked| {
+        if q.is_empty() {
+            ""
+        } else {
+            items[r.index].label.as_str()
+        }
+    };
+    out.sort_unstable_by(|a, b| {
+        a.tier
+            .cmp(&b.tier)
+            .then(items[a.index].group.cmp(&items[b.index].group))
+            .then_with(|| label(a).cmp(label(b)))
+            .then(a.index.cmp(&b.index))
+    });
+    out.truncate(PALETTE_MAX_RESULTS);
+    out
+}
+
+/// Splits `label` into `(text, highlighted)` runs for a highlight range.
+pub fn highlight_runs(label: &str, hl: Option<(usize, usize)>) -> Vec<(&str, bool)> {
+    match hl {
+        Some((s, e))
+            if s < e
+                && e <= label.len()
+                && label.is_char_boundary(s)
+                && label.is_char_boundary(e) =>
+        {
+            [
+                (&label[..s], false),
+                (&label[s..e], true),
+                (&label[e..], false),
+            ]
+            .into_iter()
+            .filter(|(t, _)| !t.is_empty())
+            .collect()
+        }
+        _ => vec![(label, false)],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -403,5 +624,141 @@ mod tests {
         assert_eq!(grid_cols(7), 6);
         assert_eq!(grid_cols(12), 12);
         assert_eq!(grid_cols(200), 12);
+    }
+
+    #[test]
+    fn rail_mode_parse() {
+        assert_eq!(RailMode::parse("expanded"), Some(RailMode::Expanded));
+        assert_eq!(RailMode::parse("collapsed"), Some(RailMode::Collapsed));
+        for bad in ["", "Collapsed", "true", "collapsed ", "\"><x>"] {
+            assert_eq!(RailMode::parse(bad), None, "{bad:?}");
+        }
+        assert_eq!(RailMode::default(), RailMode::Expanded);
+        for m in [RailMode::Expanded, RailMode::Collapsed] {
+            assert_eq!(RailMode::parse(m.as_str()), Some(m));
+            assert_eq!(m.toggled().toggled(), m);
+        }
+    }
+
+    fn labels<'a>(items: &[(&'a str, &[&str], u8)], r: &[Ranked]) -> Vec<&'a str> {
+        r.iter().map(|x| items[x.index].0).collect()
+    }
+
+    #[test]
+    fn palette_tiers_in_order() {
+        let none: &[&str] = &[];
+        let items: Vec<(&str, &[&str], u8)> = vec![
+            ("Hostname tool", none, 1), // substring "tool"? no: word prefix
+            ("Tool", none, 1),          // exact
+            ("Toolbox", none, 1),       // prefix
+            ("Stooling", none, 1),      // substring
+            ("Home", &["tool"], 0),     // keyword
+            ("T o o l s", none, 4),     // subsequence
+            ("Unrelated", none, 0),
+        ];
+        let r = rank_palette("TOOL", &items);
+        assert_eq!(
+            labels(&items, &r),
+            vec![
+                "Tool",
+                "Toolbox",
+                "Hostname tool",
+                "Stooling",
+                "Home",
+                "T o o l s"
+            ]
+        );
+        assert_eq!(r[0].tier, Some(MatchTier::Exact));
+        assert_eq!(r[2].highlight, Some((9, 13)));
+        assert_eq!(r[4].highlight, None);
+    }
+
+    #[test]
+    fn palette_ties_group_then_alpha_and_empty_query() {
+        let none: &[&str] = &[];
+        let items: Vec<(&str, &[&str], u8)> = vec![
+            ("Sign out", none, 4),
+            ("Theme: dark", none, 3),
+            ("beta", none, 1),
+            ("Alpha", none, 1),
+            ("Home", none, 0),
+        ];
+        assert_eq!(
+            labels(&items, &rank_palette("   ", &items)),
+            vec!["Home", "beta", "Alpha", "Theme: dark", "Sign out"]
+        );
+        assert_eq!(
+            labels(&items, &rank_palette("a", &items)),
+            vec!["Alpha", "beta", "Theme: dark"]
+        );
+    }
+
+    #[test]
+    fn palette_cap_case_and_unicode() {
+        let none: &[&str] = &[];
+        let names: Vec<String> = (0..120).map(|i| format!("item {i}")).collect();
+        let items: Vec<(&str, &[&str], u8)> = names.iter().map(|n| (n.as_str(), none, 1)).collect();
+        assert_eq!(rank_palette("", &items).len(), PALETTE_MAX_RESULTS);
+        assert_eq!(rank_palette("ITEM", &items).len(), PALETTE_MAX_RESULTS);
+        let u: Vec<(&str, &[&str], u8)> = vec![("Ünïcode Größe", none, 0)];
+        let r = rank_palette("größe", &u);
+        assert_eq!(r[0].tier, Some(MatchTier::WordPrefix));
+        let (s, e) = r[0].highlight.unwrap();
+        assert_eq!(&"Ünïcode Größe"[s..e], "Größe");
+        assert!(rank_palette("zzz", &u).is_empty());
+        assert!(rank_palette("<b>", &u).is_empty());
+    }
+
+    #[test]
+    fn highlight_runs_split() {
+        assert_eq!(
+            highlight_runs("Hello", Some((1, 3))),
+            vec![("H", false), ("el", true), ("lo", false)]
+        );
+        assert_eq!(highlight_runs("Hello", None), vec![("Hello", false)]);
+        assert_eq!(
+            highlight_runs("Hello", Some((0, 99))),
+            vec![("Hello", false)]
+        );
+        assert_eq!(highlight_runs("Hello", Some((0, 5))), vec![("Hello", true)]);
+    }
+
+    #[test]
+    fn palette_ranking_is_fast() {
+        let names: Vec<String> = (0..500)
+            .map(|i| format!("Tool number {i} for ops"))
+            .collect();
+        let kw: &[&str] = &["alpha", "beta"];
+        let items: Vec<(&str, &[&str], u8)> = names.iter().map(|n| (n.as_str(), kw, 1)).collect();
+        let t = std::time::Instant::now();
+        for q in ["t", "tool", "ops", "zz", "tnfo"] {
+            let _ = rank_palette(q, &items);
+        }
+        assert!(t.elapsed().as_millis() < 10, "{:?}", t.elapsed()); // 5 queries, < 2ms each
+    }
+
+    #[test]
+    fn palette_folded_500_items_fast_and_equivalent() {
+        let names: Vec<String> = (0..500)
+            .map(|i| format!("Tool Número {i} for Ops"))
+            .collect();
+        let kw: &[&str] = &["Alpha", "beta"];
+        let items: Vec<(&str, &[&str], u8)> = names
+            .iter()
+            .enumerate()
+            .map(|(i, n)| (n.as_str(), kw, (i % 5) as u8))
+            .collect();
+        let folded = fold_palette(&items);
+        let t = std::time::Instant::now();
+        for _ in 0..20 {
+            for q in ["t", "tool", "ops", "alpha", "zz", "tnfo", "número 4"] {
+                let _ = rank_folded(q, &folded);
+            }
+        }
+        // 140 keystrokes over 500 items; generous bound for debug CI hosts.
+        assert!(t.elapsed().as_millis() < 500, "{:?}", t.elapsed());
+        for q in ["", "t", "ALPHA", "número 4"] {
+            assert_eq!(rank_folded(q, &folded), rank_palette(q, &items), "{q}");
+        }
     }
 }

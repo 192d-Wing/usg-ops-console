@@ -286,9 +286,36 @@ deadline; the gateway rechecks both on every proxied request.
   next Shift+Tab reaches the shell control before the frame. This is
   expected; see [compliance/ACCESSIBILITY.md](compliance/ACCESSIBILITY.md).
 - Shell keyboard shortcuts do not fire while focus is inside your frame.
+  This includes the console command palette (M4.5): Ctrl+K / Cmd+K
+  pressed inside your frame stays with your tool and does not open the
+  palette, and there is no SDK message to forward it (protocol v1 is
+  unchanged). You may bind Ctrl/Cmd+K inside your tool. Users reach the
+  palette by moving focus back to the shell (F6 or Shift+F6) or with the
+  "Search…" button in the top bar. E2E: `palette.spec.ts` "theme from the
+  palette reaches the tool (ThemeChanged); shortcut inside the tool frame
+  does not open the palette".
 
 E2E: `tool-a11y.spec.ts`. SDK wasm test:
 `focus_edge_picks_visible_target_only_from_body`.
+
+## Styling with console-ui tokens
+
+Tools may style themselves with the console-ui design tokens
+(`console_ui::TOKENS_CSS`, `assets/tokens.css`) and component styles
+(`COMPONENTS_CSS`), served as files from the tool's own origin (see
+[crates/console-ui/README.md](../crates/console-ui/README.md#using-the-styles-in-a-tool)).
+M4.5 restyled the console ("calm neutral", pine teal accent). Token names
+were kept and new tokens were only added, so existing tool stylesheets keep
+working; tools may use the new tokens (for example
+`--cui-color-surface-sunken`, `--cui-font-weight-medium`, `--cui-space-sm`).
+`examples/hello-tool/web/assets/hello.css` uses only `--cui-*` tokens and is
+the reference.
+
+API and CSS changes for tools that use console-ui components (for example
+new `BadgeColor` variants, the deprecated `SearchInput`, and the
+`TopNavigation` slot order) are listed in
+[crates/console-ui/CHANGELOG.md](../crates/console-ui/CHANGELOG.md).
+`ThemeChanged` values (`light`, `dark`, `system`) are unchanged.
 
 ## Proxy contract
 

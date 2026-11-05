@@ -1,5 +1,6 @@
-/* Shell chrome layout. Uses console-ui tokens only (no raw colours/sizes except
-   layout breakpoints and the sidenav column width). */
+/* Shell chrome layout (M4.5 "calm neutral"). Uses console-ui tokens only; the
+   only literal lengths are the layout breakpoints (45rem, 30rem), which must
+   match NAV_BREAKPOINT in main.rs. No inline styles anywhere (style-src 'self'). */
 * { box-sizing: border-box; }
 body {
   margin: 0;
@@ -12,81 +13,139 @@ body {
 .skip-link {
   position: absolute; left: var(--cui-space-s); top: calc(-1 * var(--cui-size-control) * 2);
   padding: var(--cui-space-xs) var(--cui-space-s);
-  background: var(--cui-color-surface); color: var(--cui-color-accent-text);
-  border-radius: var(--cui-radius-s); z-index: var(--cui-z-flash);
+  background: var(--cui-color-surface-raised); color: var(--cui-color-accent-text);
+  border: var(--cui-border-width-s) solid var(--cui-color-border-subtle);
+  border-radius: var(--cui-radius-m); z-index: var(--cui-z-critical);
+  font-weight: var(--cui-font-weight-medium);
 }
 .skip-link:focus {
   top: var(--cui-space-s);
   outline: var(--cui-border-width-m) solid transparent; outline-offset: var(--cui-border-width-m);
   box-shadow: var(--cui-focus-ring);
 }
-.topbar__theme {
-  font: inherit; color: inherit; background: transparent;
-  border: var(--cui-border-width-s) solid currentColor; border-radius: var(--cui-radius-pill);
-  min-height: var(--cui-size-target-min); padding: 0 var(--cui-space-m); cursor: pointer;
+
+/* --- App frame: top bar, flashbar, then rail + main. */
+.app { display: flex; flex-direction: column; min-height: 100vh; }
+.layout {
+  flex: 1 1 auto;
+  display: grid; grid-template-columns: auto minmax(0, 1fr);
+  min-height: 0;
 }
+
+/* --- Top bar pieces (the bar is .cui-topnav; brand, palette trigger and
+   scope segments are styled by console-ui: .cui-brand, .cui-palette-trigger,
+   .cui-scope-crumbs__seg). Only shell-specific bits live here. */
+.topbar__brand { white-space: nowrap; }
+.topbar__theme {
+  display: inline-flex; align-items: center; gap: var(--cui-space-xs);
+  font: inherit; font-size: var(--cui-font-size-s); font-weight: var(--cui-font-weight-medium);
+  color: var(--cui-color-text); background: transparent;
+  border: var(--cui-border-width-s) solid var(--cui-color-border); border-radius: var(--cui-radius-m);
+  min-height: var(--cui-size-control); padding: 0 var(--cui-space-sm); cursor: pointer; white-space: nowrap;
+}
+.topbar__theme:hover { background: var(--cui-color-surface-hover); }
 .topbar__theme:focus-visible {
   outline: var(--cui-border-width-m) solid transparent; outline-offset: var(--cui-border-width-m);
   box-shadow: var(--cui-focus-ring);
 }
 
-/* Scope bar: below the banner, on the surface colour so field labels keep
-   their normal contrast. Wraps at narrow widths. */
-.scopebar {
-  display: flex; flex-wrap: wrap; align-items: flex-end; gap: var(--cui-space-s) var(--cui-space-m);
-  padding: var(--cui-space-s) var(--cui-space-m);
-  background: var(--cui-color-surface);
-  border-bottom: var(--cui-border-width-s) solid var(--cui-color-border-subtle);
+/* --- Breadcrumb scope switcher layout (popovers anchor to their item). */
+.scope-crumbs { position: relative; min-width: 0; }
+.scope-crumbs__list {
+  display: flex; align-items: center; gap: var(--cui-space-xxs);
+  margin: 0; padding: 0; list-style: none; min-width: 0;
 }
-.scopebar__meta { margin-inline-start: auto; font-size: var(--cui-font-size-s); color: var(--cui-color-text-muted); }
-.scope-picker { display: flex; flex-wrap: wrap; gap: var(--cui-space-s) var(--cui-space-m); min-width: 0; }
-.scope-picker__field { display: flex; flex-direction: column; min-width: 10rem; }
+.scope-crumbs__item { position: relative; display: flex; align-items: center; min-width: 0; }
+.cui-scope-crumbs__value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Compact (< 45rem): the same list renders inside the single scope popover
+   (one set of selects across widths, D4). */
+.scope-crumbs--compact .scope-crumbs__list { display: block; }
+.scope-crumbs--compact .scope-crumbs__item { display: block; }
+.scope-crumbs--compact .scope-crumbs__item + .scope-crumbs__item { margin-top: var(--cui-space-sm); }
+.scope-picker__field { display: flex; flex-direction: column; min-inline-size: 12rem; }
+.scope-picker__field + .scope-picker__field { margin-top: var(--cui-space-sm); }
 .scope-picker__hint {
   margin: var(--cui-space-xxs) 0 0;
   font-size: var(--cui-font-size-s); color: var(--cui-color-text-muted);
 }
-
-.shell-flash { position: sticky; top: 0; z-index: var(--cui-z-flash); }
-.layout { display: grid; grid-template-columns: 15rem minmax(0, 1fr); min-height: 100vh; }
-.sidenav-region {
-  background: var(--cui-color-surface);
-  border-right: var(--cui-border-width-s) solid var(--cui-color-border-subtle);
-  padding: var(--cui-space-m);
+.scope-picker__hint:focus-visible, .scope-picker__hint:focus {
+  outline: var(--cui-border-width-m) solid transparent; outline-offset: var(--cui-border-width-m);
+  box-shadow: var(--cui-focus-ring); border-radius: var(--cui-radius-s);
 }
-.sidenav-region[hidden] { display: none; }
-.content { padding: var(--cui-space-l); min-width: 0; }
+
+/* --- Icon rail region (the nav itself is .cui-rail from console-ui). The
+   id stays side-nav-region (E2E, F6). No width animation: the frame resizes
+   through the grid only, so the tool iframe is never remounted. */
+.rail-region {
+  inline-size: var(--cui-size-rail-expanded);
+  background: var(--cui-color-surface-sunken);
+  border-inline-end: var(--cui-border-width-s) solid var(--cui-color-border-subtle);
+  min-width: 0;
+}
+.rail-region[data-rail="collapsed"] { inline-size: var(--cui-size-rail-collapsed); }
+.rail-region[hidden] { display: none; }
+.rail-region__sticky { position: sticky; top: 0; max-block-size: 100vh; overflow-y: auto; }
+.rail-scrim { display: none; }
+
+.content { padding: var(--cui-space-l) var(--cui-space-xl); min-width: 0; }
 .content:focus { outline: none; }
 .page-crumbs { margin-bottom: var(--cui-space-s); }
 .page-header { margin-bottom: var(--cui-space-l); }
 .gallery-section { margin-bottom: var(--cui-space-xl); }
+/* Below top-bar dropdowns/popovers (z dropdown) so a flash never covers an
+   open menu (D3: user-menu Retry under the session error). Still sticky and
+   in the a11y tree; palette and idle dialogs stay above it. */
+.shell-flash { position: sticky; top: 0; z-index: calc(var(--cui-z-dropdown) - 1); }
 
-/* Side nav collapses behind the toggle below 45rem (A11Y-008); the matching
+/* Below 45rem the rail is a drawer behind nav-toggle (A11Y-008); the
    matchMedia query lives in main.rs (NAV_BREAKPOINT). */
-@media (min-width: 45rem) {
-  .nav-toggle-slot { display: none; }
-}
 @media (max-width: 44.99rem) {
   .layout { grid-template-columns: minmax(0, 1fr); }
-  .sidenav-region {
-    border-right: 0;
-    border-bottom: var(--cui-border-width-s) solid var(--cui-color-border-subtle);
+  .rail-region, .rail-region[data-rail="collapsed"] {
+    position: fixed; inset-block: 0; inset-inline-start: 0;
+    inline-size: min(var(--cui-size-rail-expanded), 85vw);
+    z-index: var(--cui-z-rail-overlay);
+    background: var(--cui-color-surface-raised);
+    box-shadow: var(--cui-shadow-l);
+  }
+  .rail-region__sticky { max-block-size: none; block-size: 100%; }
+  .rail-scrim {
+    display: block; position: fixed; inset: 0;
+    z-index: calc(var(--cui-z-rail-overlay) - 1);
+    background: var(--cui-color-overlay); border: 0; padding: 0; margin: 0;
   }
   .content { padding: var(--cui-space-m); }
-  .scope-picker, .scope-picker__field { flex: 1 1 100%; }
-  .scopebar__meta { margin-inline-start: 0; }
+  .scope-picker__field { min-inline-size: 0; }
+}
+/* Icon-only below these widths. Visually hidden (not display:none) so the
+   text stays the accessible name of the theme button and the brand link. */
+@media (max-width: 44.99rem) {
+  .topbar__theme-label {
+    position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
+  .topbar__theme { position: relative; padding: 0 var(--cui-space-s); }
+}
+@media (max-width: 29.99rem) {
+  .topbar__brand-name {
+    position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden;
+    clip-path: inset(50%); white-space: nowrap;
+  }
+  .topbar__brand { position: relative; }
 }
 
 /* User menu placeholder while /api/session loads (first paint not blocked). */
 .user-menu-skeleton {
   display: inline-block; inline-size: calc(var(--cui-size-control) * 3); block-size: var(--cui-size-control);
-  border-radius: var(--cui-radius-pill); background: var(--cui-color-border-subtle);
+  border-radius: var(--cui-radius-m); background: var(--cui-color-surface-hover);
 }
 @media (prefers-reduced-motion: no-preference) {
   .user-menu-skeleton { animation: user-menu-pulse 1.5s ease-in-out infinite; }
 }
 @keyframes user-menu-pulse { 50% { opacity: 0.5; } }
+.user-menu-meta { margin: 0; padding: var(--cui-space-xs) var(--cui-space-sm); font-size: var(--cui-font-size-xs); color: var(--cui-color-text-muted); }
 /* Idle dialog countdown: tabular digits so the text does not jitter. */
-.idle-countdown { font-weight: var(--cui-font-weight-bold); font-variant-numeric: tabular-nums; }
+.idle-countdown { font-weight: var(--cui-font-weight-semibold); font-variant-numeric: tabular-nums; }
 
 /* Tool container (M4). The frame fills the content column; the height is a
    layout value (viewport minus chrome), not a design token. */
@@ -100,7 +159,7 @@ body {
 .tool-frame {
   display: block; inline-size: 100%; block-size: 75vh; min-block-size: 20rem;
   border: var(--cui-border-width-s) solid var(--cui-color-border-subtle);
-  border-radius: var(--cui-radius-s);
+  border-radius: var(--cui-radius-l);
   background: var(--cui-color-bg);
 }
 .tool-frame:focus-visible, .tool-frame:focus, .tool-frame[data-frame-focused] {
@@ -115,3 +174,9 @@ body {
 @media (max-width: 44.99rem) {
   .tool-frame { block-size: 70vh; }
 }
+@media (forced-colors: active) {
+  .topbar__theme { border-color: ButtonText; }
+  .rail-region { border-inline-end-color: CanvasText; }
+}
+/* Idle warning above the command palette and flashbar (plan 2.2 z-index). */
+.cui-modal[data-testid="idle-dialog"] { z-index: var(--cui-z-critical); }

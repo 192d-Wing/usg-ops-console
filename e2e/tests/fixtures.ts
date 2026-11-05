@@ -26,10 +26,18 @@ export type ThemeName = "light" | "dark";
 
 export const TID = {
   topNav: "top-navigation",
-  serviceMenu: "service-menu",
-  serviceMenuButton: "service-menu-button",
-  serviceMenuPanel: "service-menu-panel",
-  search: "global-search",
+  // M4.5: service menu and global search were replaced by the rail + palette.
+  paletteTrigger: "palette-trigger",
+  palette: "command-palette",
+  paletteInput: "palette-input",
+  paletteList: "palette-list",
+  paletteEmpty: "palette-empty",
+  paletteStatus: "palette-status",
+  scopePicker: "scope-picker",
+  /** Single compact "Scope" button below 45rem. */
+  scopeTrigger: "scope-trigger",
+  scopePopover: "scope-popover",
+  railScrim: "rail-scrim",
   site: "scope-site",
   tenant: "scope-tenant",
   env: "scope-env",
@@ -87,4 +95,53 @@ export async function tabUntilFocused(page: Page, target: Locator, max = 40): Pr
     await page.keyboard.press("Tab");
   }
   await expect(target).toBeFocused();
+}
+
+export type ScopeSeg = "site" | "tenant" | "env";
+
+/**
+ * M4.5: the scope selects live in popovers that are `hidden` while closed.
+ * Open the popover holding `seg` (wide: `scope-<seg>-trigger`; below 45rem:
+ * the single `scope-trigger`) and return the select. Idempotent: an already
+ * open popover is left open (it stays open after a change, plan Q6).
+ */
+export async function openScope(page: Page, seg: ScopeSeg): Promise<Locator> {
+  const select = page.getByTestId(`scope-${seg}`);
+  if (await select.isVisible()) return select;
+  const compact = page.getByTestId(TID.scopeTrigger);
+  const trigger = (await compact.isVisible()) ? compact : page.getByTestId(`scope-${seg}-trigger`);
+  await trigger.click();
+  await expect(trigger).toHaveAttribute("aria-expanded", "true");
+  await expect(select).toBeVisible();
+  return select;
+}
+
+/** Open the command palette from its visible top-bar trigger. */
+export async function openPalette(page: Page): Promise<Locator> {
+  await page.getByTestId(TID.paletteTrigger).click();
+  const input = page.getByTestId(TID.paletteInput);
+  await expect(input).toBeFocused();
+  return input;
+}
+
+/** No horizontal page scroll (SC 1.4.10). */
+export async function expectNoHorizontalScroll(page: Page): Promise<void> {
+  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
+    scrollWidth: document.documentElement.scrollWidth,
+    clientWidth: document.documentElement.clientWidth,
+  }));
+  expect(scrollWidth, `scrollWidth ${scrollWidth} > clientWidth ${clientWidth}`).toBeLessThanOrEqual(clientWidth);
+}
+
+/** `panel` is visible and fully inside the viewport horizontally (and not above it). */
+export async function expectInsideViewport(page: Page, panel: Locator): Promise<void> {
+  await expect(panel).toBeVisible();
+  const box = await panel.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+  const { w, h } = await page.evaluate(() => ({ w: window.innerWidth, h: window.innerHeight }));
+  expect(box.x, `panel left ${box.x}`).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width, `panel right ${box.x + box.width} > ${w}`).toBeLessThanOrEqual(w + 0.5);
+  expect(box.y, `panel top ${box.y}`).toBeGreaterThanOrEqual(0);
+  expect(box.y, `panel top ${box.y} below viewport ${h}`).toBeLessThan(h);
 }

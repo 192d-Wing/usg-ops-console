@@ -909,15 +909,39 @@ pub async fn auth_css() -> Response {
 pub mod pages {
     use super::*;
 
+    /// Calm-neutral look for the public auth pages. System colours are the
+    /// base (and the only colours under forced-colors); the palette below is
+    /// literal hexes duplicated from console-ui tokens.css (guarded by
+    /// console-ui tests/guards.rs, which include_str!s this file).
     pub const AUTH_CSS: &str = "\
-:root{color-scheme:light dark;font-family:system-ui,-apple-system,\"Segoe UI\",Roboto,sans-serif;\
-line-height:1.5;background:Canvas;color:CanvasText}\
+:root{color-scheme:light dark;font-family:system-ui,-apple-system,\"Segoe UI\",Roboto,\"Noto Sans\",\
+\"Helvetica Neue\",Arial,sans-serif;font-size:100%;line-height:1.5;background:Canvas;color:CanvasText}\
 body{margin:0;padding:1rem}\
-main{max-width:40rem;margin:2rem auto;padding:1.5rem;border:1px solid GrayText;border-radius:.5rem}\
-h1{font-size:1.5rem;margin-top:0}\
+main{box-sizing:border-box;max-width:32rem;margin:3rem auto;padding:2rem;border:1px solid GrayText;\
+border-radius:10px;font-size:.875rem;overflow-wrap:anywhere}\
+.brand{margin:0 0 1.5rem;font-size:.8125rem;font-weight:600;letter-spacing:.01em}\
+.brand::before{content:\"\";display:inline-block;width:.75rem;height:.75rem;margin-right:.5rem;\
+border-radius:4px;background:CanvasText;vertical-align:-.0625rem}\
+h1{font-size:1.5rem;line-height:1.25;font-weight:600;margin:0 0 1rem}\
+p{margin:0 0 .75rem}\
 a{color:LinkText;text-underline-offset:.15em}\
-a:focus-visible{outline:2px solid Highlight;outline-offset:2px}\
-ul.actions{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:1rem}\
+a:focus-visible{outline:2px solid Highlight;outline-offset:2px;border-radius:4px}\
+ul.actions{list-style:none;padding:0;margin:1.5rem 0 0;display:flex;flex-wrap:wrap;gap:1rem}\
+@media (forced-colors:none){\
+:root{background:#f7f7f8;color:#18181b}\
+main{background:#ffffff;border-color:#e4e4e7}\
+.brand,p:last-child{color:#55555f}\
+.brand::before{background:#0e7268}\
+a{color:#0b6b62}\
+a:focus-visible{outline-color:#0e7268}}\
+@media (forced-colors:none) and (prefers-color-scheme:dark){\
+:root{background:#111113;color:#ececef}\
+main{background:#18181b;border-color:#2e2e33}\
+.brand,p:last-child{color:#a1a1aa}\
+.brand::before{background:#3fb8a9}\
+a{color:#5ccbbd}\
+a:focus-visible{outline-color:#6fd0c3}}\
+@media (max-width:40rem){main{margin:1rem auto;padding:1.5rem 1rem}}\
 ";
 
     const HELP: &str = "<p>If this keeps happening, contact your administrator or the help desk \
@@ -938,7 +962,7 @@ ul.actions{list-style:none;padding:0;display:flex;flex-wrap:wrap;gap:1rem}\
              <meta name=\"color-scheme\" content=\"light dark\">\
              <link rel=\"stylesheet\" href=\"/auth.css\">\
              <title>{title} - USG Ops Console</title></head>\
-             <body><main><h1>{title}</h1>{body}</main></body></html>"
+             <body><main><p class=\"brand\">USG Ops Console</p><h1>{title}</h1>{body}</main></body></html>"
         );
         (
             status,

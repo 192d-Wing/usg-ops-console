@@ -83,3 +83,48 @@ fn gallery_not_default_feature() {
         "gallery must not be a default feature: {default}"
     );
 }
+
+/// Hex colours (`#rrggbb`, lower-cased) appearing in `text`.
+fn hexes(text: &str) -> std::collections::BTreeSet<String> {
+    let b = text.as_bytes();
+    let mut out = std::collections::BTreeSet::new();
+    for (i, _) in text.match_indices('#') {
+        let h = &b[i + 1..];
+        let n = h.iter().take_while(|c| c.is_ascii_hexdigit()).count();
+        let next_ok = h
+            .get(n)
+            .is_none_or(|c| !c.is_ascii_alphanumeric() && *c != b'_');
+        if n == 6 && next_ok {
+            out.insert(text[i..i + 7].to_ascii_lowercase());
+        }
+    }
+    out
+}
+
+/// The gateway's static AUTH_CSS duplicates token values literally (the
+/// gateway must not depend on console-ui); every hex must be a real token.
+#[test]
+fn auth_css_hexes_are_tokens() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let routes =
+        fs::read_to_string(root.join("console-gateway/src/routes.rs")).expect("read routes.rs");
+    let start = routes
+        .find("const AUTH_CSS")
+        .expect("const AUTH_CSS in routes.rs");
+    let body = &routes[start..];
+    // End = first line ending in an unescaped `";` (inner quotes are `\"`).
+    let end = body
+        .match_indices("\";\n")
+        .map(|(i, _)| i)
+        .find(|i| *i > 0 && body.as_bytes()[i - 1] != b'\\')
+        .expect("end of AUTH_CSS");
+    let auth = &body[..end];
+    let tokens = hexes(&console_ui::TOKENS_CSS.to_ascii_lowercase());
+    let found = hexes(auth);
+    assert!(!found.is_empty(), "no hex colours found in AUTH_CSS");
+    let stray: Vec<_> = found.difference(&tokens).collect();
+    assert!(
+        stray.is_empty(),
+        "AUTH_CSS hexes not in tokens.css: {stray:?}"
+    );
+}

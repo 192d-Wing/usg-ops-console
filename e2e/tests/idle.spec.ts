@@ -117,3 +117,52 @@ test("no X / 'Close dialog' button; every dialog button is Stay or Sign out (A11
   await expect(d.getByTestId("idle-announcer")).toHaveCount(0);
   await expect(page.getByTestId("idle-announcer")).toHaveCount(1);
 });
+
+test("M4.5: idle dialog opens above the palette: palette closes, chrome inert, shortcut ignored", async ({ page, baseURL }) => {
+  await signedIn(page, baseURL!);
+  await page.getByTestId("palette-trigger").click();
+  await expect(page.getByTestId("palette-input")).toBeFocused();
+  await page.clock.fastForward((IDLE_SECS - LEAD_SECS + 2) * 1000);
+  const d = dialog(page);
+  await expect(d).toBeVisible();
+  await expect(page.getByTestId("command-palette")).toBeHidden();
+  await expect(page.getByTestId("idle-stay")).toBeFocused();
+  await expect(page.locator("#app-chrome")).toHaveAttribute("inert", "");
+  // Topmost at the dialog centre is the idle dialog (stacking above palette layers).
+  const top = await d.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return !!hit && el.contains(hit);
+  });
+  expect(top).toBe(true);
+  await page.keyboard.press("ControlOrMeta+k");
+  await page.keyboard.press("Control+k");
+  await expect(page.getByTestId("command-palette")).toBeHidden();
+  await expect(page.getByTestId("idle-stay")).toBeFocused();
+  for (let i = 0; i < 4; i++) {
+    await page.keyboard.press("Tab");
+    expect(await d.evaluate((el) => el.contains(document.activeElement))).toBe(true);
+  }
+});
+
+// Fix round 2 (SEC-002): once the idle dialog has closed the palette, the
+// chrome must stay inert (the palette's own un-inert must not win).
+test("SEC-002: idle over palette, palette closed -> #app-chrome still inert until the dialog is answered", async ({ page, baseURL }) => {
+  await signedIn(page, baseURL!);
+  await page.getByTestId("palette-trigger").click();
+  await expect(page.getByTestId("palette-input")).toBeFocused();
+  await expect(page.locator("#app-chrome")).toHaveAttribute("inert", "");
+  await page.clock.fastForward((IDLE_SECS - LEAD_SECS + 2) * 1000);
+  await expect(dialog(page)).toBeVisible();
+  await expect(page.getByTestId("command-palette")).toBeHidden();
+  await expect(page.locator("#app-chrome")).toHaveAttribute("inert", "");
+  // Let any deferred palette close/focus-restore tasks run, then re-check.
+  await page.clock.runFor(1000);
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0))));
+  await expect(page.locator("#app-chrome")).toHaveAttribute("inert", "");
+  expect(await page.getByTestId("palette-trigger").evaluate((el) => !!el.closest("[inert]"))).toBe(true);
+  await expect(page.getByTestId("idle-stay")).toBeFocused();
+  await page.getByTestId("idle-stay").click();
+  await expect(dialog(page)).toBeHidden();
+  await expect(page.locator("#app-chrome")).not.toHaveAttribute("inert", "");
+});

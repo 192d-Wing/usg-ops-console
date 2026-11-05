@@ -1,8 +1,9 @@
 # Accessibility conformance notes
 
-Status as of M4, 2026-11-04. Target: WCAG 2.1 AA (Section 508). This file
-holds conformance remarks for a future VPAT. It is not a full VPAT. M4
-evidence is from local runs and CI run 41892456284 (Firefox included).
+Status as of M4.5 (redesign), 2026-11-04. Target: WCAG 2.1 AA (Section
+508). This file holds conformance remarks for a future VPAT. It is not a
+full VPAT. M4 evidence is from local runs and CI run 41892456284 (Firefox
+included). **M4.5 evidence is from local runs only; CI has not run M4.5.**
 
 Related evidence: axe scans (`e2e/tests/a11y.spec.ts`, Chromium only,
 POAM-012), keyboard and reflow specs, the token contrast test
@@ -28,8 +29,9 @@ What the shell does (`crates/console-shell/src/tool_host.rs`,
   Console home. Reload moves focus to the loading region, then the frame
   wrapper or error panel, never into the tool. Tool title changes are
   announced politely while focus is in the frame.
-- Service-menu "Loading tools..." and "No tools available" are
-  non-interactive notes.
+- (M4.5) The service menu is removed. In the command palette, "Loading"
+  is an `aria-disabled` row that cannot be selected, and a failed
+  `/api/tools` gives an enabled Retry row.
 
 Tests: E2E `tool-a11y.spec.ts` (Tab, Shift+Tab, click, F6/Shift+F6, skip
 link, not-found heading, reload focus), axe on the loaded, loading, 403
@@ -39,6 +41,98 @@ and 404 container states (`tools.spec.ts`, Chromium); shell
 `not_found_meta_has_error_heading`; SDK wasm
 `focus_edge_picks_visible_target_only_from_body`; console-ui wasm
 `dropdown_keyboard_and_escape`.
+
+## Shell redesign (M4.5)
+
+Conformance remarks for the rail, command palette and scope popovers. The
+ux-a11y review approved these after round 2; open items are listed at the
+end of this section.
+
+### Collapsed rail tooltip (SC 1.4.13 Content on Hover or Focus)
+
+- Collapsed rail links keep their text label as the accessible name
+  (visually hidden). The tooltip is a separate `aria-hidden` element
+  (`.cui-rail__tip`, `crates/console-ui/src/components/rail.rs`), so it is
+  not part of the name (SC 4.1.2).
+- **Dismissible:** Escape hides every tip without moving focus or the
+  pointer (`data-tip-dismissed` on the rail `<nav>`; the show rule in
+  `components.css` excludes it). It re-arms on link mouseleave, rail
+  focusout or a mode change.
+- **Hoverable:** the tip is inside the link, and a transparent bridge
+  covers the gap, so the pointer can move onto it and it stays shown.
+- **Persistent:** it stays until hover or focus ends or it is dismissed.
+- Evidence: wasm `rail_collapsed_keeps_text_names`
+  (`crates/console-ui/tests/wasm.rs`, checks computed visibility at rest,
+  on hover and focus, and after Escape; passed locally, fixes round 3);
+  E2E `rail.spec.ts` "accessible names are exactly the label while tips
+  render; tips are aria-hidden" and "hoverable: moving the pointer from the
+  link onto the tip keeps it shown" (passed on 5 engines locally, QA round
+  2). The E2E Escape cases ("Escape dismisses the hover tip…", "Escape
+  dismisses the focus tip…", `rail.spec.ts:176` and `:196`) failed in QA
+  round 2 (R2-D1) and pass after fixes round 3 on macOS Chromium and WebKit
+  and Linux Chromium, Firefox and WebKit (QA "Round 3 rerun"; local, CI
+  pending). The wasm test also asserts the tip's computed visibility.
+
+### Command palette (combobox pattern)
+
+- `CommandPalette` (`crates/console-ui/src/components/palette.rs`) is a
+  modal dialog with the APG combobox-with-listbox pattern: `role=combobox`
+  input with `aria-controls`, `aria-expanded`, `aria-autocomplete`,
+  `aria-activedescendant`; options with `aria-selected`; arrows wrap,
+  Home/End; Tab and Shift+Tab are trapped; Escape closes and returns focus
+  to the opener (or the palette trigger, then main content). The chrome
+  behind it is `inert`. The result count is announced in a polite status
+  region, debounced 300 ms (SC 4.1.3). Disabled rows are `aria-disabled`
+  and skipped. Options are at least 24x24 px (SC 2.5.8).
+- Ctrl+K / Cmd+K opens it from the shell; the visible "Search…" trigger is
+  the pointer and discoverable path (SC 2.1.1). The trigger has
+  `aria-haspopup` and `aria-keyshortcuts`.
+- Evidence: E2E `palette.spec.ts` (ARIA wiring, keys, Tab trap, focus
+  return, count, targets, reduced motion), wasm
+  `palette_combobox_navigation_and_focus_return`,
+  `palette_empty_state_is_text_only`; axe on palette results, empty state
+  and 320 px in light and dark (`a11y.spec.ts`, Chromium). Passed locally
+  in QA round 2.
+
+### Scope popovers
+
+- Each breadcrumb segment is a button with `aria-controls` and
+  `aria-expanded` that opens a non-modal `role=dialog` popover with a
+  native `<select>`. Opening moves focus to the select (or to its hint
+  when the select is disabled). Escape closes and returns focus to the
+  segment; an outside pointerdown or Tab out closes it without pulling
+  focus back. The cascade live region (`scope-announcer`) sits outside the
+  popovers. Below 45rem one "Scope" button opens a single popover with all
+  three selects, inside the 320 px viewport (SC 1.4.10).
+- Segments show a 3:1 border and a chevron at rest (SC 1.4.11).
+- Evidence: wasm `popover_open_escape_and_outside_click`,
+  `popover_closes_on_focus_out_without_moving_focus`,
+  `popover_embedded_keeps_children`; E2E `scope.spec.ts` (A11Y-002 Tab-out
+  and A11Y-004 border cases), `reflow.spec.ts` compact scope at 320 px; axe
+  on site, tenant and compact popovers (Chromium). Passed locally in QA
+  round 2. Residual: POAM-049 (disabled segment style unreachable;
+  `border-disabled` equals `border`).
+
+### Contrast, forced colors, motion
+
+- Contrast: `token_pairs_meet_wcag_aa` (`crates/console-ui/tests/contrast.rs`)
+  checks every declared token pair in light and dark (4.5:1 text, 3:1 UI
+  and borders), including the M4.5 sunken, accent-subtle and hover pairs;
+  `every_dark_color_has_a_light_counterpart` checks parity. Pairs that are
+  not declared are not checked. Passed locally (`make check`).
+- Forced colors: `components.css` uses Highlight for focus outlines, the
+  active rail item and the active palette option, and CanvasText borders on
+  the palette, popovers and tooltip. Only a Chromium emulation spot check
+  exists (`rail.spec.ts` "forced-colors spot check").
+- Reduced motion: palette and rail transitions are 0 (E2E `palette.spec.ts`
+  "palette and rail have no transition under prefers-reduced-motion").
+
+### Open manual checks (POAM-046)
+
+- Windows High Contrast on a real Windows host (rail active item,
+  tooltip, palette, popovers).
+- VoiceOver pass over the rail, palette and scope popovers. No screen
+  reader has been used on M4.5; names were checked by accname computation.
 
 ## Known platform behaviour: Firefox reverse-Tab stop on the tool iframe
 
@@ -80,6 +174,9 @@ VPAT remark for **SC 2.4.3 Focus Order** (also relevant to 2.1.1, 2.1.2,
 ## Known gaps
 
 - axe runs on Chromium only (POAM-012).
+- M4.5: manual Windows High Contrast and VoiceOver checks not done
+  (POAM-046); rail tooltip Escape E2E not re-run after fixes round 3;
+  sub-page styling in the collapsed rail (A11Y-003) checked visually only.
 - WebKit skips the native Tab/Shift+Tab tool tests (WebKit without Full
   Keyboard Access does not tab to links and buttons); F6 and the skip link
   cover WebKit.

@@ -2,7 +2,14 @@ use yew::prelude::*;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum BadgeColor {
+    /// Semantic modifiers (preferred).
     #[default]
+    Neutral,
+    Info,
+    Success,
+    Warning,
+    Error,
+    /// Legacy colour names, kept as aliases (same look as the semantic ones).
     Grey,
     Blue,
     Green,
@@ -21,6 +28,11 @@ pub struct BadgeProps {
 #[function_component]
 pub fn Badge(props: &BadgeProps) -> Html {
     let m = match props.color {
+        BadgeColor::Neutral => "cui-badge--neutral",
+        BadgeColor::Info => "cui-badge--info",
+        BadgeColor::Success => "cui-badge--success",
+        BadgeColor::Warning => "cui-badge--warning",
+        BadgeColor::Error => "cui-badge--error",
         BadgeColor::Grey => "cui-badge--grey",
         BadgeColor::Blue => "cui-badge--blue",
         BadgeColor::Green => "cui-badge--green",

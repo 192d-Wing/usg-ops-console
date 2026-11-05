@@ -1,4 +1,4 @@
-# Architecture (current state, M4)
+# Architecture (current state, M4.5)
 
 This describes what is built today. The target design and the milestones are
 in [PLAN.md](PLAN.md). M3 added Keycloak OIDC sign-in, server-side
@@ -10,6 +10,12 @@ assertion with a JWKS, the shell tool container, SDK protocol v1 with the
 [INTEGRATING-A-TOOL.md](INTEGRATING-A-TOOL.md). M4 is green in
 CI run [41892456284](https://github.com/192d-Wing/usg-ops-console/actions/runs/41892456284).
 
+M4.5 (redesign, 2026-11-04) replaced the visual design and the shell layout:
+a "calm neutral" token set, a collapsible icon rail, a Ctrl/Cmd+K command
+palette and a breadcrumb scope switcher. Routes, contracts, the CSP and SDK
+protocol v1 are unchanged. **M4.5 has local evidence only; CI has not run
+this change yet.**
+
 ## Crates
 
 | Crate | What it does today |
@@ -17,7 +23,7 @@ CI run [41892456284](https://github.com/192d-Wing/usg-ops-console/actions/runs/4
 | `console-protocol` | Serde types for the tool manifest, SDK v1 messages (`message`), the gateway session HTTP shapes (`session`), and (M4) the tool-hosting contract (`tools`: `/api/tools`, launch, `/_console/context`, assertion claims, header and route names). Frozen fixtures in `tests/fixtures/sdk_v1/` and `tools_v1/`. |
 | `console-sdk` | Tool-side bridge: `codec` (exact-origin encode/decode, native) and, with feature `web`, the browser `postMessage` transport and Yew hooks (M4). |
 | `console-ui` | Yew 0.23 component library, design tokens (`tokens.css`) and component styles (`components.css`). See [crates/console-ui/README.md](../crates/console-ui/README.md). |
-| `console-shell` | Yew CSR app built with Trunk: skip link, top navigation (service menu, global search, user menu, theme toggle), scope picker, page header and breadcrumbs, flashbar, collapsible side navigation, router, and an optional component gallery. |
+| `console-shell` | Yew CSR app built with Trunk: skip link, top bar (nav toggle, product mark, palette trigger, breadcrumb scope switcher, theme toggle, user menu), command palette, collapsible icon rail, page header and breadcrumbs, flashbar, router, and an optional component gallery. |
 | `console-gateway` | axum server: OIDC sign-in, server-side sessions (Postgres), logout, audit log, security headers, the shell's static `dist` behind the session check, and (M4) the tool registry, tool origins, reverse proxy and identity assertion. |
 | `examples/hello-tool/*` | `hello-tool-server` (axum: assertion verifier, API, serves the web build) and `hello-tool-web` (Yew tool using the SDK, plus the hostile `evil` fixture). Template and E2E target. |
 
@@ -41,32 +47,123 @@ CI run [41892456284](https://github.com/192d-Wing/usg-ops-console/actions/runs/4
   `console-ui/assets/components.css` and `assets/shell.css` as Trunk CSS
   assets. There are no inline styles or scripts in `index.html`.
 
-### Chrome (`src/chrome.rs`, `src/demo.rs`)
+### Design system (`console-ui`, M4.5)
 
-- `TopNavigation` banner with `ServiceMenu`, `GlobalSearch`, `UserMenu`
-  and the theme toggle.
-- `ServiceMenu` (M4) lists the tools from `GET /api/tools`, which the
-  gateway filters by role (POAM-010 closed), grouped by category, with
-  loading, empty (non-interactive notes) and Retry states. The side
-  navigation gets a "Tools" section with the active tool's nav entries.
+- "Calm neutral" look: neutral grey surfaces, one accent colour (pine teal,
+  `#0e7268` light / `#3fb8a9` dark), 1px borders, soft radii, flat
+  containers. Light and dark are both full themes. Token names keep the
+  `--cui-` prefix; M4.5 only added tokens (none removed or renamed). The
+  top bar is a light surface with a hairline border; there is no inverse
+  (navy) chrome.
+- Cloudscape guard: test `no_cloudscape_values`
+  (`crates/console-ui/tests/contrast.rs`) fails if `tokens.css` or
+  `components.css` contains any hex from a fixed list of Cloudscape blue
+  and navy values. `token_pairs_meet_wcag_aa` checks the declared
+  contrast pairs in both themes; `every_dark_color_has_a_light_counterpart`
+  checks theme parity.
+- The gateway's `/auth.css` (`AUTH_CSS` in
+  `crates/console-gateway/src/routes.rs`) copies token hexes; test
+  `auth_css_hexes_are_tokens` (`crates/console-ui/tests/guards.rs`) checks
+  that every hex in it exists in `tokens.css`.
+- Details: [crates/console-ui/README.md](../crates/console-ui/README.md)
+  and `crates/console-ui/CHANGELOG.md`.
+
+### Chrome (`src/chrome.rs`, `src/main.rs`, `src/rail.rs`, `src/palette.rs`, `src/demo.rs`)
+
+- Top bar (`TopNavigation`), in DOM order: nav toggle, product mark and
+  name, palette trigger ("Search…" with a ⌘K or Ctrl K hint), breadcrumb
+  scope switcher, theme toggle, user menu. The M4 service menu and global
+  search box are removed. The SDK protocol version text moved from the old
+  scope bar into the user menu.
 - `UserMenu` shows the signed-in user's `display_name` from `/api/session`
   ("Signed in as `<username>`") and a working Sign out (POST `/logout` with
   the CSRF token). While loading it shows a skeleton; if `/api/session`
   fails it shows "Session unavailable" with Retry and Sign in. A
   `role=status` region announces "Signing out…".
-- `GlobalSearch` is display-only: input truncated to 256 characters, submit
-  shows "Search is not available yet", and the query is never echoed, stored
-  or put in the URL.
-- `ScopePicker` sits in a `.scopebar` row below the banner (with the SDK
-  protocol version text): three native `<select>`s (Site, Tenant,
-  Environment) in a `role=group` labelled "Scope", and a polite live region
-  (`scope-announcer`).
+
+#### Icon rail
+
+- `Rail` (`console-ui`) in `#side-nav-region`: Home, Gallery (gallery
+  builds only), and the permitted tools from `GET /api/tools` (filtered by
+  role in the gateway) with the active tool's sub-pages. Tools without an
+  icon show a two-letter monogram.
+- At `(min-width: 45rem)` (`NAV_BREAKPOINT`) the nav toggle switches the
+  rail between expanded (icons and labels) and collapsed (icons only).
+  Collapsed links keep the text label as their accessible name (visually
+  hidden) and show an `aria-hidden` tooltip on hover and focus. Escape
+  hides the tooltip without moving focus, and the pointer can move onto it
+  (WCAG 1.4.13). `#side-nav-region` carries `data-rail="expanded|collapsed"`.
+- Persistence: the wide-screen mode is stored per browser in
+  `localStorage["usg-console.rail"]` (`RAIL_STORAGE_KEY`). The stored value
+  goes through an allow-list (`rail::parse_stored`, `RailMode::parse`;
+  SI-10); anything else falls back to the default, expanded. Storage errors
+  are ignored.
+- Below 45rem the rail is a drawer behind the nav toggle, as in M2: hidden
+  by default, focus moves to the first link on open, Escape and a scrim
+  click close it and return focus to the toggle. The stored collapsed mode
+  is ignored there.
+- Toggling the rail never remounts the tool container (the `ToolHost` vnode
+  keeps its key).
+
+#### Command palette
+
+- `CommandPalette` (`console-ui`) is a modal dialog with an APG combobox
+  (`palette-input`) and listbox (`palette-list`), arrow, Home/End and Enter
+  keys, a polite result count (debounced 300 ms), a Tab trap, `inert` on
+  `#app-chrome`, and focus return to the opener (or to the palette trigger,
+  then `#main-content`).
+- Opening: the visible trigger, or Ctrl+K / Cmd+K (no Alt or Shift) through
+  a listener on the shell document (`use_palette_shortcut` in
+  `src/main.rs`). The same combo closes it. The shortcut is ignored on key
+  repeat, when already handled, while the idle dialog is open, and while
+  `#app-chrome` is inert (for example under a modal). It does nothing while
+  focus is inside a tool frame, because key events in the frame do not
+  reach the shell document; the SDK protocol is unchanged.
+- Sources (`src/palette.rs`), built only while the palette is open:
+  Navigation (Home, Gallery in gallery builds), Tools (the permitted tools
+  from `/api/tools`, a disabled "Loading" row or an enabled Retry row),
+  Scope (site; tenant only once a site is set; env only once a tenant is
+  set), Preferences (light, dark, system; the current one is hinted), and
+  Account (Sign out, once the session has loaded).
+- Selecting an item closes the palette, then resolves its id through a
+  closed `Action` enum. Navigation uses the same router path as the rail;
+  a tool id resolves only by lookup in the loaded tool list (never from the
+  query text); theme uses the same code as the theme toggle; Sign out uses
+  the same CSRF POST as the user menu. An id that no longer resolves shows a
+  Warning flash (`resolve_palette_select`, test
+  `palette_select_unresolved_closes_and_warns`).
+- Ranking (`logic::rank_palette`): exact, prefix, word prefix, substring,
+  keyword, subsequence; ties by group, then alphabetically; at most 50
+  results.
+- Privacy: the query is component state only. It is capped at 256
+  characters (`PALETTE_MAX_QUERY`), rendered as text, and never stored,
+  sent, or put in the URL or history (E2E "palette query is never echoed
+  outside the palette, URL, storage or network", `keyboard.spec.ts`).
+  Recent picks are not stored.
+
+#### Breadcrumb scope switcher
+
+- `ScopePicker` renders the scope as breadcrumb segments (site › tenant ›
+  env) in a `<nav aria-label="Scope">`. At 45rem and wider, each segment
+  opens its own `Popover` (non-modal dialog) holding that level's native
+  `<select>`. Below 45rem a single "Scope" button opens one popover with
+  all three selects. One DOM tree serves both widths, so the selects are not
+  re-created on a width change.
+- The cascade, URL and history rules and validation are unchanged from M2
+  (see "Global scope" below). The `scope-announcer` live region sits
+  outside the popovers. A popover stays open after a change; it closes on
+  Escape (focus returns to the segment), an outside pointerdown, or focus
+  leaving it.
+
+#### Layering
+
+- z-order (tokens): rail drawer overlay 950, palette 1050, flash just
+  below dropdowns, idle dialog and skip link `--cui-z-critical` 1200. When
+  the idle warning opens, the shell closes the palette and keeps
+  `#app-chrome` inert until the dialog is answered (E2E `idle.spec.ts`
+  "M4.5: idle dialog opens above the palette…" and "SEC-002: idle over
+  palette…").
 - Page header (H1) and breadcrumbs come from `PageMeta`.
-- Side navigation: at `(min-width: 45rem)` (`NAV_BREAKPOINT` in `main.rs`) it
-  is always shown. Below that it is hidden behind a `NavToggle` disclosure.
-  The initial state comes from `matchMedia(NAV_BREAKPOINT)`, and a change
-  listener keeps it in sync. Below 45rem the top-bar dropdown panels are
-  anchored to the top bar so they stay inside a 320 px viewport.
 
 ### Contexts (`src/ctx.rs`)
 
@@ -114,7 +211,7 @@ History semantics:
   including `popstate` (`use_location`), so Back and Forward restore the full
   prior scope.
 - Each picker change is one `push`; cascaded clears go into the same entry.
-- Following an in-app link (side nav, breadcrumbs, service menu) appends the
+- Following an in-app link (rail, breadcrumbs, command palette) appends the
   current scope keys to the target path.
 - History is written through yew-router's shared `BrowserHistory`. Every URL
   passes through `same_origin_url`, which collapses leading `/` or `\` runs to
@@ -490,10 +587,20 @@ The container is a two-stage build. Both base images are pinned by
 The final stage contains the gateway binary and the release `dist` copied to
 `/srv/console`.
 
+Bundle size at M4.5: **240,530 B** gz (`gzip -9`, fixes round 3;
+QA round 2 measured 241,796 B with `gzip -c`, before the round 3 fixes),
+about 15.3% of the 1.5 MB budget and about +16.5% over M4 (206,548 B).
+Accepted (PERF-001, M4.5: the rail, palette and popovers are the
+milestone's features; breakdown in the run's `perf-wu2-size.txt`). The CI
+warn baseline (`WASM_GZ_BASELINE` in `.github/workflows/ci.yml`) is moved
+to 240,530 B (warn above 264,583 B). That change is not yet committed or
+run in CI. Note that the CI step measures with `gzip -c`, which gives a
+slightly larger number than the `gzip -9` baseline.
+
 Bundle size at M4: **206,548 B** gz (`gzip -c`, QA final round), 13.1%
 of the 1.5 MB budget, +18.6% over `main` (174,214 B). Accepted (PERF-001
-M4: the tool host is the milestone's feature). The CI warn baseline stays
-at 204,977 B (warn above 225,474 B). hello-tool web wasm: about 150 KB gz
+M4: the tool host is the milestone's feature). The CI warn baseline stayed
+at 204,977 B (warn above 225,474 B) for M4. hello-tool web wasm: about 150 KB gz
 (target under 250 KB).
 
 M3 history: bundle size (release `dist` wasm, `gzip -9`): 173,207 B at M3 (+22.0% over
@@ -521,6 +628,7 @@ the IdP blackhole proxy; it renders the tool registries into
 | M4 additions to the main projects | main + tool origins | `tools`, `tools-norole`, `tool-security`, `tool-isolation`, `tool-a11y`, `session-gaps`, opt-in `proxy-bench` (`E2E_BENCH=1`) |
 | `idle-*` (M4 adds) | idle gateway + tool origin 9453 | `idle-tool.spec.ts` |
 | `ka503-chromium`, `ka503-firefox`, `ka503-webkit` | KA503 gateway | `keepalive-503.spec.ts` |
+| M4.5 additions to the main projects | main | `rail.spec.ts`, `palette.spec.ts`; `idle.spec.ts` gains idle-over-palette cases |
 | `prodlike-chromium` | prodlike gateway (env `E2E_PRODLIKE=1`; `--host-resolver-rules` locally, `/etc/hosts` in CI) | `prodlike.spec.ts` |
 
 Helpers: `auth-helpers.ts` (Keycloak login), `db-helpers.ts` (audit
@@ -533,6 +641,14 @@ Latest local runs (M4 QA final round): macOS chromium/webkit projects plus
 firefox, webkit; prodlike excluded), 428 passed, 37 skipped, 3 failed (Linux
 WebKit Keycloak sign-in flake, POAM-044; rerun 43/43). The CI `e2e` job
 passed in CI run 41892456284 (1 flaky, POAM-045).
+
+M4.5 local runs (QA round 2, after fixes round 2): macOS chromium/webkit
+projects 373 passed, 4 failed; Linux container (chromium, firefox, webkit)
+543 passed, 6 failed. All 10 failures are the two rail tooltip Escape
+tests (R2-D1, WCAG 1.4.13). Fixes round 3 changed the CSS and added a wasm
+test (`rail_collapsed_keeps_text_names`) that checks computed visibility,
+but the E2E suite has **not** been re-run after round 3, and CI has not
+run M4.5.
 
 ## Compliance
 

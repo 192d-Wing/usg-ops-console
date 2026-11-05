@@ -4,10 +4,10 @@ use web_sys::wasm_bindgen::JsCast;
 use web_sys::{Element, HtmlElement};
 use yew::prelude::*;
 
-const FOCUSABLE: &str = "a[href], button:not([disabled]), input:not([disabled]), \
+pub(crate) const FOCUSABLE: &str = "a[href], button:not([disabled]), input:not([disabled]), \
     select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex=\"-1\"])";
 
-fn focusables(root: &Element) -> Vec<HtmlElement> {
+pub(crate) fn focusables(root: &Element) -> Vec<HtmlElement> {
     let Ok(list) = root.query_selector_all(FOCUSABLE) else {
         return Vec::new();
     };
@@ -17,13 +17,13 @@ fn focusables(root: &Element) -> Vec<HtmlElement> {
         .collect()
 }
 
-fn active_element() -> Option<Element> {
+pub(crate) fn active_element() -> Option<Element> {
     web_sys::window()?.document()?.active_element()
 }
 
 /// Sets or clears `inert` on the element with `id`. Errors are reported to the
 /// caller so they can be surfaced (never swallowed).
-fn set_inert(id: &str, on: bool) -> Result<(), AttrValue> {
+pub(crate) fn set_inert(id: &str, on: bool) -> Result<(), AttrValue> {
     let el = web_sys::window()
         .and_then(|w| w.document())
         .and_then(|d| d.get_element_by_id(id))
@@ -39,7 +39,7 @@ fn set_inert(id: &str, on: bool) -> Result<(), AttrValue> {
 /// Returns focus to `el`. If it is still inside an `inert` subtree (e.g. a
 /// parent clears inert in its own effect cleanup, whose order relative to ours
 /// is not guaranteed), retry once in a microtask after that cleanup has run.
-fn restore_focus(el: HtmlElement) {
+pub(crate) fn restore_focus(el: HtmlElement) {
     let inert = el.closest("[inert]").ok().flatten().is_some();
     if !inert {
         let _ = el.focus();

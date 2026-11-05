@@ -55,6 +55,21 @@ const PAIRS: &[(&str, &str, f64)] = &[
     ("text-muted", "surface-hover", 4.5),
     ("accent-text", "surface-hover", 4.5),
     ("border", "topbar-bg", 3.0),
+    // M4.5 calm neutral: rail / table header on surface-sunken, rail active.
+    ("text", "surface-sunken", 4.5),
+    ("text-muted", "surface-sunken", 4.5),
+    ("accent-text", "surface-sunken", 4.5),
+    ("focus", "surface-sunken", 3.0),
+    ("border", "surface-sunken", 3.0),
+    ("text-muted", "accent-subtle", 4.5),
+    ("focus", "surface-hover", 3.0),
+    ("focus", "accent-subtle", 3.0),
+];
+
+/// Cloudscape / AWS console values that must never reappear (M4.5 brief).
+const CLOUDSCAPE_HEX: &[&str] = &[
+    "#0966c2", "#0972d3", "#539fe5", "#0f1b2a", "#000716", "#192534", "#232f3e", "#16191f",
+    "#5f6b7a", "#7d8998", "#414d5c",
 ];
 
 /// Extracts `--cui-color-*: #hex;` declarations from the first block that
@@ -127,7 +142,8 @@ fn dark_blocks_are_identical() {
 fn every_dark_color_overrides_a_light_color() {
     let light = block(TOKENS, ":root {");
     let dark = block(TOKENS, ":root[data-theme=\"dark\"]");
-    for k in light.keys() {
+    // `neutral-*` are theme-independent raw primitives (light block only).
+    for k in light.keys().filter(|k| !k.starts_with("neutral-")) {
         assert!(dark.contains_key(k), "dark theme missing --cui-color-{k}");
     }
 }
@@ -166,4 +182,28 @@ fn token_pairs_meet_wcag_aa() {
         "contrast failures:\n{}",
         failures.join("\n")
     );
+}
+
+#[test]
+fn every_dark_color_has_a_light_counterpart() {
+    let light = block(TOKENS, ":root {");
+    let dark = block(TOKENS, ":root[data-theme=\"dark\"]");
+    for k in dark.keys() {
+        assert!(light.contains_key(k), "light theme missing --cui-color-{k}");
+    }
+}
+
+#[test]
+fn no_cloudscape_values() {
+    let lower = TOKENS.to_ascii_lowercase();
+    for h in CLOUDSCAPE_HEX {
+        assert!(!lower.contains(h), "Cloudscape value {h} in tokens.css");
+    }
+    let components = include_str!("../assets/components.css").to_ascii_lowercase();
+    for h in CLOUDSCAPE_HEX {
+        assert!(
+            !components.contains(h),
+            "Cloudscape value {h} in components.css"
+        );
+    }
 }

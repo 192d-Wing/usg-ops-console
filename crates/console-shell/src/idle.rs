@@ -90,6 +90,10 @@ pub struct IdleWatchProps {
     pub on_keepalive: Callback<()>,
     pub on_sign_out: Callback<()>,
     pub flash: Callback<(AlertKind, AttrValue)>,
+    /// Told when the warning opens or closes (the shell closes the command
+    /// palette first; plan 4.2).
+    #[prop_or_default]
+    pub on_open_change: Callback<bool>,
 }
 
 /// Arms one timer per session snapshot (re-armed when keepalive returns a new
@@ -159,10 +163,14 @@ pub fn IdleWatch(p: &IdleWatchProps) -> Html {
     let absolute = dl.is_some_and(|d| d.absolute);
     // A tool's RequestSessionRefresh is honoured while the warning is shown
     // (SEC-002/NIST-001; see `activity`).
-    use_effect_with(open, |open| {
-        crate::activity::set_idle_dialog_open(*open);
-        || crate::activity::set_idle_dialog_open(false)
-    });
+    {
+        let notify = p.on_open_change.clone();
+        use_effect_with(open, move |open| {
+            crate::activity::set_idle_dialog_open(*open);
+            notify.emit(*open);
+            || crate::activity::set_idle_dialog_open(false)
+        });
+    }
     use_effect_with((open, absolute), |(open, absolute)| {
         if *open {
             // Runs after the Modal's own effect focused the dialog.

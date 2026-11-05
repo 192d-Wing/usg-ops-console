@@ -78,6 +78,11 @@ pub fn set_idle_dialog_open(open: bool) {
     IDLE_DIALOG_OPEN.with(|c| c.set(open));
 }
 
+/// Whether the idle warning is shown (the shell ignores Ctrl/Cmd+K then).
+pub fn idle_dialog_open() -> bool {
+    IDLE_DIALOG_OPEN.with(Cell::get)
+}
+
 fn note_input() {
     LAST_INPUT_MS.with(|c| c.set(Some(js_sys::Date::now())));
 }

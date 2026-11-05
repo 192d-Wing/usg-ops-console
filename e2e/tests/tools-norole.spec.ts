@@ -25,13 +25,23 @@ test.describe("user without hello:user", () => {
     expect(forbidden, "forbidden vs unknown launch response").toEqual(unknown);
   });
 
-  test("hello hidden from the service menu; launch and /tools/hello are 404 Tool not found (INT-009)", async ({ page, baseURL }) => {
+  test("hello hidden from the rail and the palette; launch and /tools/hello are 404 Tool not found (INT-009)", async ({ page, baseURL }) => {
     const nohello = { username: "nohello_user", password: "dev-only-nohello_user", name: /nohello_user|No Hello/ };
     await loginAt(page, baseURL!, "/", nohello);
     const tools = await (await page.request.get("/api/tools", { headers: { Accept: "application/json" } })).json();
     expect((tools.tools as { id: string }[]).map((t) => t.id)).not.toContain("hello");
-    await page.getByTestId(TID.serviceMenuButton).click();
-    await expect(page.getByTestId(TID.serviceMenuPanel).getByTestId("service-menu-item-tool-hello")).toHaveCount(0);
+    // Reload and wait for the shell's own /api/tools fetch so absence is not vacuous.
+    const listed = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/tools" && r.status() === 200);
+    await page.reload();
+    await listed;
+    await expect(page.getByTestId(TID.sideNav)).toBeVisible();
+    await expect(page.getByTestId("rail-item-home")).toBeVisible();
+    await expect(page.locator('[data-testid^="rail-item-tool-"]')).toHaveCount(0);
+    await page.getByTestId(TID.paletteTrigger).click();
+    await expect(page.getByTestId("palette-option-nav-home")).toBeVisible();
+    await expect(page.getByTestId("palette-option-tools-loading")).toHaveCount(0);
+    await expect(page.locator('[data-testid^="palette-option-tool-"]')).toHaveCount(0);
+    await page.keyboard.press("Escape");
     const r = await launch(page.request, "hello");
     expect(r.status()).toBe(404);
     expect(await r.json()).toMatchObject({ error: "not_found" });

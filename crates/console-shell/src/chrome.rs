@@ -1,48 +1,19 @@
-//! Console chrome pieces composed into the top navigation: service menu,
-//! global search, user menu and the cascading scope picker.
+//! Console chrome pieces composed into the top navigation: the user menu and
+//! the breadcrumb scope switcher (M2 cascading picker inside popovers).
 
 use crate::ctx::{ScopeCtx, SessionCtx};
 use crate::demo::{self, SITES};
+use crate::palette::Seg;
 use crate::scope::{self, find_site, find_tenant};
 use console_ui::{
-    AlertKind, Dropdown, DropdownItem, FieldIds, FormField, OnFollow, SearchInput, Select,
-    SelectOption,
+    AlertKind, Dropdown, DropdownItem, FieldIds, FormField, Icon, IconName, Popover, PopoverAlign,
+    Select, SelectOption,
 };
 use std::cell::Cell;
 use std::rc::Rc;
 use yew::prelude::*;
 
 type Flash = Callback<(AlertKind, AttrValue)>;
-
-#[derive(Properties, PartialEq)]
-pub struct ServiceMenuProps {
-    pub onfollow: OnFollow,
-}
-
-/// Tool switcher from `/api/tools` (already role-filtered by the gateway;
-/// POAM-010). Shows loading, empty and retry states.
-#[function_component]
-pub fn ServiceMenu(p: &ServiceMenuProps) -> Html {
-    let tools = use_context::<crate::tools::ToolsCtx>();
-    let state = tools
-        .as_ref()
-        .map_or(crate::tools::ToolsState::Loading, |t| t.state.clone());
-    let items = use_memo(state, crate::tools::service_items);
-    let on_action = {
-        let reload = tools.map(|t| t.reload);
-        Callback::from(move |id: AttrValue| {
-            if id == crate::tools::RETRY_ACTION
-                && let Some(r) = &reload
-            {
-                r.emit(());
-            }
-        })
-    };
-    html! {
-        <Dropdown label="Services" items={(*items).clone()} {on_action}
-            onfollow={Some(p.onfollow.clone())} test_id="service-menu" />
-    }
-}
 
 #[derive(Properties, PartialEq)]
 pub struct FlashProps {
@@ -123,32 +94,15 @@ pub fn UserMenu(p: &FlashProps) -> Html {
                     },
                     DropdownItem::Divider,
                     DropdownItem::Action { id: "sign-out".into(), text: "Sign out".into() },
+                    DropdownItem::Divider,
+                    // Moved from the old scope bar (plan 4.3); text unchanged.
+                    DropdownItem::Note {
+                        id: "sdk-protocol".into(),
+                        text: format!("SDK protocol v{}", console_protocol::PROTOCOL_VERSION).into(),
+                    },
                 ]} />
             { status }
         </>
-    }
-}
-
-/// Display-only search box. The query is never echoed, stored or put in the URL.
-#[function_component]
-pub fn GlobalSearch(p: &FlashProps) -> Html {
-    let value = use_state(AttrValue::default);
-    let on_change = {
-        let value = value.clone();
-        Callback::from(move |v: AttrValue| value.set(v))
-    };
-    let on_submit = {
-        let flash = p.flash.clone();
-        Callback::from(move |_: AttrValue| {
-            flash.emit((
-                AlertKind::Info,
-                AttrValue::Static("Search is not available yet"),
-            ));
-        })
-    };
-    html! {
-        <SearchInput label="Search the console" placeholder="Search" value={(*value).clone()}
-            {on_change} {on_submit} test_id="global-search" />
     }
 }
 
@@ -190,22 +144,85 @@ fn announce_later(announce: UseStateHandle<String>, msg: String, gen_ref: Rc<Cel
 /// Gap between clearing and re-setting the live region.
 const ANNOUNCE_DELAY_MS: i32 = 100;
 
-/// Cascading scope picker: site -> tenant -> environment. Option lists come
-/// only from the allow-listed demo hierarchy, never from the URL.
-#[function_component]
-pub fn ScopePicker() -> Html {
-    let Some(ctx) = use_context::<ScopeCtx>() else {
-        return Html::default();
+#[derive(Properties, PartialEq)]
+pub struct ScopePickerProps {
+    /// Wide layout (>= 45rem): one segment per level. Narrow: one "Scope"
+    /// button whose popover holds all three selects.
+    pub wide: bool,
+    /// Segment whose popover is open (owned by the shell so the command
+    /// palette can open one).
+    pub open: Option<Seg>,
+    pub on_open: Callback<Option<Seg>>,
+}
+
+/// Popover ids (`aria-controls`).
+fn popover_id(seg: Option<Seg>) -> String {
+    match seg {
+        Some(s) => format!("scope-{}-popover", s.key()),
+        None => "scope-popover".to_owned(),
+    }
+}
+
+/// Focus target when a scope popover opens: the segment's select, or its
+/// hint when the select is disabled (so focus is never lost on open).
+fn focus_target(seg: Seg, disabled: bool) -> String {
+    let id = match seg {
+        Seg::Site => "scope-site",
+        Seg::Tenant => "scope-tenant",
+        Seg::Env => "scope-env",
     };
-    // Polite announcement of cascaded clears; region always rendered so
-    // assistive tech picks up changes.
+    if disabled {
+        format!("#{id}-hint")
+    } else {
+        format!("#{id}")
+    }
+}
+
+/// Breadcrumb scope switcher (plan 4.3): Site > Tenant > Environment. Each
+/// segment opens a popover with the unchanged M2 cascading `<select>`. Option
+/// lists come only from the allow-listed demo hierarchy, never from the URL.
+/// The popover stays open after a change (brief decision), so keyboard users
+/// can Tab on to the next segment.
+#[function_component]
+pub fn ScopePicker(p: &ScopePickerProps) -> Html {
+    let anchors = use_memo((), |_| {
+        [
+            NodeRef::default(),
+            NodeRef::default(),
+            NodeRef::default(),
+            NodeRef::default(),
+        ]
+    });
+    // Polite announcement of cascaded clears; region always rendered (outside
+    // the popovers) so assistive tech picks up changes.
     let announce = use_state(String::new);
     let announce_gen: Rc<Cell<u32>> = (*use_memo((), |_| Rc::new(Cell::new(0u32)))).clone();
-    let cur = ctx.scope.clone();
+    let ctx = use_context::<ScopeCtx>();
+    let cur = ctx.as_ref().map(|c| c.scope.clone()).unwrap_or_default();
     let site = cur.site.as_deref().and_then(|s| find_site(SITES, s));
     let tenant = site
         .zip(cur.tenant.as_deref())
         .and_then(|(s, t)| find_tenant(s, t));
+    let disabled = |seg: Seg| match seg {
+        Seg::Site => false,
+        Seg::Tenant => site.is_none(),
+        Seg::Env => tenant.is_none(),
+    };
+
+    // Move focus into the popover for the requested segment. Runs after the
+    // Popover's own open effect (children first), so it wins in the compact
+    // layout, where one popover holds all three selects.
+    {
+        let target = p.open.map(|s| focus_target(s, disabled(s)));
+        use_effect_with((target, p.wide), |(t, _)| {
+            if let Some(t) = t {
+                crate::focus_selector(t);
+            }
+        });
+    }
+    let Some(ctx) = ctx else {
+        return Html::default();
+    };
 
     let site_opts: Vec<SelectOption> = std::iter::once(all_option())
         .chain(SITES.iter().map(|s| SelectOption::new(s.id, s.name)))
@@ -266,6 +283,8 @@ pub fn ScopePicker() -> Html {
     let sel = |v: &Option<String>| Some(AttrValue::from(v.clone().unwrap_or_default()));
     // `hint` is the field description; `disabled` is separate so the Site
     // field can explain what it enables without being disabled (A11Y-004).
+    // The hint takes programmatic focus (tabindex -1) when its select is
+    // disabled and the popover opens.
     let field = |label: &'static str,
                  id: &'static str,
                  options: Vec<SelectOption>,
@@ -285,27 +304,169 @@ pub fn ScopePicker() -> Html {
                     }) }
                 </FormField>
                 if let Some(h) = hint {
-                    <p class="scope-picker__hint" id={hint_id} data-testid={format!("{id}-hint")}>{ h }</p>
+                    <p class="scope-picker__hint" id={hint_id} data-testid={format!("{id}-hint")}
+                        tabindex={disabled.then_some("-1")}>{ h }</p>
                 }
             </div>
         }
     };
+    let site_field = field(
+        "Site",
+        "scope-site",
+        site_opts,
+        sel(&cur.site),
+        on_site,
+        site.is_none()
+            .then_some("Selecting a site enables Tenant, then Environment"),
+        false,
+    );
+    let tenant_field = field(
+        "Tenant",
+        "scope-tenant",
+        tenant_opts,
+        sel(&cur.tenant),
+        on_tenant,
+        site.is_none().then_some("Select a site first"),
+        site.is_none(),
+    );
+    let env_field = field(
+        "Environment",
+        "scope-env",
+        env_opts,
+        sel(&cur.environment),
+        on_env,
+        tenant.is_none().then_some(if site.is_none() {
+            "Select a site first"
+        } else {
+            "Select a tenant first"
+        }),
+        tenant.is_none(),
+    );
 
+    // Segment text: the current value, or a muted placeholder when unset.
+    let value = |seg: Seg| -> (String, bool) {
+        match seg {
+            Seg::Site => site.map_or(("All sites".into(), true), |s| (s.name.into(), false)),
+            Seg::Tenant => tenant.map_or(
+                (
+                    if site.is_some() {
+                        "All tenants"
+                    } else {
+                        "Select tenant"
+                    }
+                    .into(),
+                    true,
+                ),
+                |t| (t.name.into(), false),
+            ),
+            Seg::Env => cur
+                .environment
+                .as_deref()
+                .filter(|_| tenant.is_some())
+                .map_or(
+                    (
+                        if tenant.is_some() {
+                            "All environments"
+                        } else {
+                            "Select environment"
+                        }
+                        .into(),
+                        true,
+                    ),
+                    |e| (demo::env_label(e).into(), false),
+                ),
+        }
+    };
+    let seg_name = |seg: Seg| match seg {
+        Seg::Site => "Site",
+        Seg::Tenant => "Tenant",
+        Seg::Env => "Environment",
+    };
+    let close = p.on_open.reform(|()| None);
+    let toggle = |seg: Seg| {
+        let on_open = p.on_open.clone();
+        let open = p.open;
+        Callback::from(move |_: MouseEvent| {
+            on_open.emit(if open == Some(seg) { None } else { Some(seg) })
+        })
+    };
+    let announcer = html! {
+        <div class="cui-visually-hidden" role="status" aria-live="polite" aria-atomic="true"
+            data-testid="scope-announcer">{ (*announce).clone() }</div>
+    };
+
+    // One tree for both widths (D4): the selects are created once and only
+    // attributes change across the 45rem switch. Wide: the outer popover is
+    // an embedded pass-through and each segment has its own popover.
+    // Compact: the outer popover is the dialog and the segment popovers are
+    // embedded, so all three selects show together. `open` still carries
+    // the requested segment (focus target).
+    let wide = p.wide;
+    let compact_anchor = anchors[3].clone();
+    let expanded = !wide && p.open.is_some();
+    let compact_click = {
+        let on_open = p.on_open.clone();
+        Callback::from(move |_: MouseEvent| {
+            on_open.emit(if expanded { None } else { Some(Seg::Site) })
+        })
+    };
+    let summary: Vec<String> = Seg::ALL
+        .into_iter()
+        .filter_map(|s| {
+            let (v, unset) = value(s);
+            (!unset).then_some(v)
+        })
+        .collect();
+    let fields = [site_field, tenant_field, env_field];
     html! {
-        <div class="scope-picker" role="group" aria-label="Scope" data-testid="scope-picker">
-            { field("Site", "scope-site", site_opts, sel(&cur.site), on_site,
-                site.is_none().then_some("Selecting a site enables Tenant, then Environment"),
-                false) }
-            { field("Tenant", "scope-tenant", tenant_opts, sel(&cur.tenant), on_tenant,
-                site.is_none().then_some("Select a site first"), site.is_none()) }
-            { field("Environment", "scope-env", env_opts, sel(&cur.environment), on_env,
-                tenant.is_none().then_some(if site.is_none() {
-                    "Select a site first"
-                } else {
-                    "Select a tenant first"
-                }), tenant.is_none()) }
-            <div class="cui-visually-hidden" role="status" aria-live="polite" aria-atomic="true"
-                data-testid="scope-announcer">{ (*announce).clone() }</div>
-        </div>
+        <nav class={classes!("cui-scope-crumbs", "scope-crumbs", (!wide).then_some("scope-crumbs--compact"))}
+            aria-label="Scope" data-testid="scope-picker">
+            <button type="button" class="cui-scope-crumbs__seg" ref={compact_anchor.clone()} hidden={wide}
+                aria-haspopup="dialog" aria-expanded={if expanded { "true" } else { "false" }}
+                aria-controls={popover_id(None)} data-testid="scope-trigger" onclick={compact_click}>
+                <span>{ "Scope" }</span>
+                <span class="cui-visually-hidden">
+                    { if summary.is_empty() { String::new() } else { format!(": {}", summary.join(", ")) } }
+                </span>
+                <Icon name={IconName::ChevronDown} />
+            </button>
+            <Popover id={AttrValue::from(popover_id(None))} open={expanded} on_close={close.clone()}
+                anchor={compact_anchor} label={AttrValue::Static("Scope")} align={PopoverAlign::End}
+                embedded={wide} testid={AttrValue::Static("scope-popover")}>
+            <ol class="scope-crumbs__list">
+                { for Seg::ALL.into_iter().zip(fields).enumerate().map(|(i, (seg, f))| {
+                    let anchor = anchors[i].clone();
+                    let open = wide && p.open == Some(seg);
+                    let (text, unset) = value(seg);
+                    let pid = popover_id(Some(seg));
+                    html! {
+                        <li class="scope-crumbs__item" key={seg.key()}>
+                            if i > 0 {
+                                <span class="cui-scope-crumbs__sep" aria-hidden="true" hidden={!wide}>
+                                    <Icon name={IconName::ChevronRight} />
+                                </span>
+                            }
+                            <button type="button" ref={anchor.clone()} hidden={!wide}
+                                class={classes!("cui-scope-crumbs__seg", unset.then_some("cui-scope-crumbs__seg--unset"))}
+                                aria-haspopup="dialog" aria-expanded={if open { "true" } else { "false" }}
+                                aria-controls={pid.clone()}
+                                data-testid={format!("scope-{}-trigger", seg.key())}
+                                onclick={toggle(seg)}>
+                                <span class="cui-visually-hidden">{ format!("{}: ", seg_name(seg)) }</span>
+                                <span class="cui-scope-crumbs__value">{ text }</span>
+                                <Icon name={IconName::ChevronDown} class={classes!("cui-scope-crumbs__chev")} />
+                            </button>
+                            <Popover id={AttrValue::from(pid)} {open} on_close={close.clone()} {anchor}
+                                label={AttrValue::Static(seg_name(seg))} embedded={!wide}
+                                testid={AttrValue::from(format!("scope-{}-popover", seg.key()))}>
+                                { f }
+                            </Popover>
+                        </li>
+                    }
+                }) }
+            </ol>
+            </Popover>
+            { announcer }
+        </nav>
     }
 }

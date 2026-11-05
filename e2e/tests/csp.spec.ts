@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { DEMO, TID, gotoApp } from "./fixtures";
+import { DEMO, TID, gotoApp, openScope } from "./fixtures";
 import { domViolations, selectBudget, watchCsp } from "./csp-helpers";
 
 test("no CSP violations and no non-empty [style] attributes across interactions", async ({ page, browserName }) => {
@@ -9,11 +9,16 @@ test("no CSP violations and no non-empty [style] attributes across interactions"
   expect(res?.headers()["content-security-policy"]).toBeTruthy();
   await expect(page.getByTestId(TID.topNav)).toBeVisible();
 
-  await page.getByTestId(TID.serviceMenuButton).click();
+  // M4.5: palette (replaces the service menu) and rail collapse.
+  await page.getByTestId(TID.paletteTrigger).click();
+  await page.getByTestId(TID.paletteInput).fill("hello");
   await page.keyboard.press("Escape");
+  await page.getByTestId(TID.navToggle).click();
+  await page.getByTestId(TID.navToggle).click();
   await page.getByTestId(TID.userMenuButton).click();
   await page.keyboard.press("Escape");
-  await page.getByTestId(TID.site).selectOption(DEMO.multiSite);
+  await (await openScope(page, "site")).selectOption(DEMO.multiSite);
+  await page.keyboard.press("Escape");
   await page.getByTestId(TID.themeToggle).click();
   await page.getByTestId(TID.themeToggle).click();
   expect(await page.locator('[style]:not([style=""])').count()).toBe(0);

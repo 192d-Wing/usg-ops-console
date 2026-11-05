@@ -1,42 +1,49 @@
-/* console-ui design tokens. Custom properties only; no selectors besides
- * :root. Semi-public contract: renames are breaking changes.
+/* console-ui design tokens ("calm neutral"). Custom properties only; no
+ * selectors besides :root. Semi-public contract: renames are breaking changes
+ * (values may change; new tokens are additive).
  * Theme: :root = light; dark via prefers-color-scheme unless
  * data-theme="light", or forced with data-theme="dark".
- * The two dark blocks MUST stay identical (enforced by tests/contrast.rs). */
+ * The two dark blocks MUST stay identical (enforced by tests/contrast.rs).
+ * No webfonts: system stacks only (CSP font-src unaffected). */
 :root {
   color-scheme: light;
 
   /* Typography */
-  --cui-font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --cui-font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", "Helvetica Neue", Arial, sans-serif;
   --cui-font-family-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   --cui-font-size-xs: 0.75rem;
-  --cui-font-size-s: 0.875rem;
-  --cui-font-size-m: 1rem;
-  --cui-font-size-l: 1.25rem;
-  --cui-font-size-xl: 1.75rem;
+  --cui-font-size-s: 0.8125rem;
+  --cui-font-size-m: 0.875rem;
+  --cui-font-size-l: 1.125rem;
+  --cui-font-size-xl: 1.5rem;
+  --cui-font-size-xxl: 2rem;
   --cui-font-weight-normal: 400;
-  --cui-font-weight-bold: 700;
+  --cui-font-weight-medium: 500;
+  --cui-font-weight-semibold: 600;
+  --cui-font-weight-bold: 600;
   --cui-font-line-height: 1.5;
   --cui-font-line-height-tight: 1.25;
 
-  /* Spacing */
+  /* Spacing (4px grid) */
   --cui-space-xxs: 2px;
   --cui-space-xs: 4px;
   --cui-space-s: 8px;
+  --cui-space-sm: 12px;
   --cui-space-m: 16px;
   --cui-space-l: 24px;
   --cui-space-xl: 32px;
+  --cui-space-xxl: 48px;
 
   /* Radius */
   --cui-radius-s: 4px;
-  --cui-radius-m: 8px;
-  --cui-radius-l: 16px;
+  --cui-radius-m: 6px;
+  --cui-radius-l: 10px;
   --cui-radius-pill: 999px;
 
   /* Border widths */
   --cui-border-width-s: 1px;
   --cui-border-width-m: 2px;
-  --cui-border-width-indicator: 3px; /* active tab / nav marker, large spinner */
+  --cui-border-width-indicator: 2px; /* active tab underline / rail marker */
   --cui-border-width-l: 4px;
 
   /* Control sizes */
@@ -49,136 +56,162 @@
   --cui-size-modal-w: 40rem;
   --cui-size-dropdown-w: 18rem;
   --cui-size-arrow: 0.3125rem;
+  --cui-size-icon: 1.25rem;
+  --cui-size-icon-s: 1rem;
+  --cui-size-rail-expanded: 15rem;
+  --cui-size-rail-collapsed: 3.5rem;
+  --cui-size-topbar: 3rem;
+  --cui-size-palette-w: 40rem;
+  --cui-size-popover-w: 18rem;
 
   /* Motion */
-  --cui-motion-duration-fast: 90ms;
-  --cui-motion-duration-normal: 180ms;
-  --cui-motion-duration-slow: 300ms;
-  --cui-motion-easing: cubic-bezier(0, 0, 0, 1);
+  --cui-motion-duration-fast: 100ms;
+  --cui-motion-duration-normal: 160ms;
+  --cui-motion-duration-slow: 240ms;
+  --cui-motion-easing: cubic-bezier(0.2, 0, 0, 1);
 
   /* Z-index */
   --cui-z-dropdown: 900;
+  --cui-z-rail-overlay: 950;
   --cui-z-modal: 1000;
+  --cui-z-palette: 1050;
   --cui-z-flash: 1100;
+  --cui-z-critical: 1200; /* idle dialog: above palette and flash */
+
+  /* Colour: neutral scale (raw primitives; theme-independent) */
+  --cui-color-neutral-0: #ffffff;
+  --cui-color-neutral-50: #f7f7f8;
+  --cui-color-neutral-100: #f0f0f2;
+  --cui-color-neutral-150: #e6e6e9;
+  --cui-color-neutral-200: #dcdce0;
+  --cui-color-neutral-400: #8a8a94;
+  --cui-color-neutral-500: #6b6b75;
+  --cui-color-neutral-600: #55555f;
+  --cui-color-neutral-800: #2a2a30;
+  --cui-color-neutral-900: #18181b;
 
   /* Colour: neutrals */
-  --cui-color-bg: #f4f4f4;
+  --cui-color-bg: #f7f7f8;
   --cui-color-surface: #ffffff;
   --cui-color-surface-raised: #ffffff;
-  --cui-color-surface-hover: #f0f3f6;
-  --cui-color-text: #16191f;
-  --cui-color-text-muted: #5f6b7a;
-  --cui-color-text-disabled: #87919e;
-  --cui-color-border: #7d8998;
-  --cui-color-border-subtle: #d1d5db;
-  --cui-color-border-disabled: #87919e;
-  --cui-color-overlay: rgba(15, 27, 42, 0.6);
+  --cui-color-surface-hover: #f0f0f2;
+  --cui-color-surface-sunken: #f3f3f5;
+  --cui-color-text: #18181b;
+  --cui-color-text-muted: #55555f;
+  --cui-color-text-disabled: #8a8a94;
+  --cui-color-border: #8a8a94;
+  --cui-color-border-subtle: #e4e4e7;
+  --cui-color-border-disabled: #8a8a94;
+  --cui-color-overlay: rgba(24, 24, 27, 0.45);
 
-  /* Colour: accent */
-  --cui-color-accent: #0966c2;
-  --cui-color-accent-hover: #054d94;
-  --cui-color-accent-text: #0966c2;
+  /* Colour: accent ("pine" teal, the single accent) */
+  --cui-color-accent: #0e7268;
+  --cui-color-accent-hover: #0a5a52;
+  --cui-color-accent-text: #0b6b62;
   --cui-color-on-accent: #ffffff;
-  --cui-color-accent-subtle: #e8f2fc;
+  --cui-color-accent-subtle: #e7f4f2;
 
-  /* Colour: status (fg = icon/text, bg = tinted panel) */
-  --cui-color-info: #0966c2;
-  --cui-color-info-bg: #f0f7fd;
-  --cui-color-success: #037f0c;
-  --cui-color-success-bg: #effaf0;
-  --cui-color-warning: #855900;
-  --cui-color-warning-bg: #fffbe8;
-  --cui-color-error: #c71414;
-  --cui-color-error-bg: #fff4f4;
-  --cui-color-pending: #5f6b7a;
-  --cui-color-stopped: #5f6b7a;
+  /* Colour: status (fg = icon/text, bg = tinted panel). Info uses the accent
+   * family (single-accent rule); status is never colour-only. */
+  --cui-color-info: #0b6b62;
+  --cui-color-info-bg: #eef7f5;
+  --cui-color-success: #1a7a34;
+  --cui-color-success-bg: #eef8f0;
+  --cui-color-warning: #8a5a00;
+  --cui-color-warning-bg: #fdf7e7;
+  --cui-color-error: #c0281c;
+  --cui-color-error-bg: #fdf1f0;
+  --cui-color-pending: #55555f;
+  --cui-color-stopped: #55555f;
 
-  /* Colour: chrome */
-  --cui-color-topbar-bg: #0f1b2a;
-  --cui-color-topbar-text: #ffffff;
+  /* Colour: chrome (kept for compatibility; = surface / text, no inverse bar) */
+  --cui-color-topbar-bg: #ffffff;
+  --cui-color-topbar-text: #18181b;
 
   /* Focus */
-  --cui-color-focus: #0966c2;
+  --cui-color-focus: #0e7268;
   --cui-focus-ring: 0 0 0 2px var(--cui-color-surface), 0 0 0 4px var(--cui-color-focus);
 
-  /* Shadow */
-  --cui-shadow-s: 0 1px 2px rgba(0, 7, 22, 0.12);
-  --cui-shadow-m: 0 2px 8px rgba(0, 7, 22, 0.16);
-  --cui-shadow-l: 0 8px 24px rgba(0, 7, 22, 0.24);
+  /* Shadow: cards are flat; m = menus/popovers, l = palette/modal */
+  --cui-shadow-s: none;
+  --cui-shadow-m: 0 4px 16px rgba(24, 24, 27, 0.08);
+  --cui-shadow-l: 0 16px 48px rgba(24, 24, 27, 0.16);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --cui-color-bg: #0f1b2a;
-    --cui-color-surface: #192534;
-    --cui-color-surface-raised: #232f3e;
-    --cui-color-surface-hover: #232f3e;
-    --cui-color-text: #e9ebed;
-    --cui-color-text-muted: #a4afbd;
-    --cui-color-text-disabled: #7d8998;
-    --cui-color-border: #7d8998;
-    --cui-color-border-subtle: #414d5c;
-    --cui-color-border-disabled: #7d8998;
-    --cui-color-overlay: rgba(0, 7, 22, 0.7);
-    --cui-color-accent: #539fe5;
-    --cui-color-accent-hover: #89bdee;
-    --cui-color-accent-text: #75b3ec;
-    --cui-color-on-accent: #0f1b2a;
-    --cui-color-accent-subtle: #13304d;
-    --cui-color-info: #75b3ec;
-    --cui-color-info-bg: #12263d;
-    --cui-color-success: #4cc254;
+    --cui-color-bg: #111113;
+    --cui-color-surface: #18181b;
+    --cui-color-surface-raised: #202024;
+    --cui-color-surface-hover: #27272c;
+    --cui-color-surface-sunken: #141416;
+    --cui-color-text: #ececef;
+    --cui-color-text-muted: #a1a1aa;
+    --cui-color-text-disabled: #6b6b75;
+    --cui-color-border: #71717a;
+    --cui-color-border-subtle: #2e2e33;
+    --cui-color-border-disabled: #71717a;
+    --cui-color-overlay: rgba(0, 0, 0, 0.6);
+    --cui-color-accent: #3fb8a9;
+    --cui-color-accent-hover: #6fd0c3;
+    --cui-color-accent-text: #5ccbbd;
+    --cui-color-on-accent: #0b1514;
+    --cui-color-accent-subtle: #10302c;
+    --cui-color-info: #5ccbbd;
+    --cui-color-info-bg: #10302c;
+    --cui-color-success: #5cc878;
     --cui-color-success-bg: #10291a;
-    --cui-color-warning: #e0b84a;
-    --cui-color-warning-bg: #2b2410;
-    --cui-color-error: #ff8a8a;
-    --cui-color-error-bg: #33171b;
-    --cui-color-pending: #a4afbd;
-    --cui-color-stopped: #a4afbd;
-    --cui-color-topbar-bg: #000716;
-    --cui-color-topbar-text: #ffffff;
-    --cui-color-focus: #75b3ec;
-    --cui-shadow-s: 0 1px 2px rgba(0, 0, 0, 0.5);
-    --cui-shadow-m: 0 2px 8px rgba(0, 0, 0, 0.5);
-    --cui-shadow-l: 0 8px 24px rgba(0, 0, 0, 0.6);
+    --cui-color-warning: #e2b94e;
+    --cui-color-warning-bg: #2a2310;
+    --cui-color-error: #ff8f86;
+    --cui-color-error-bg: #33171a;
+    --cui-color-pending: #a1a1aa;
+    --cui-color-stopped: #a1a1aa;
+    --cui-color-topbar-bg: #18181b;
+    --cui-color-topbar-text: #ececef;
+    --cui-color-focus: #6fd0c3;
+    --cui-shadow-s: none;
+    --cui-shadow-m: 0 4px 16px rgba(0, 0, 0, 0.5);
+    --cui-shadow-l: 0 16px 48px rgba(0, 0, 0, 0.6);
   }
 }
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --cui-color-bg: #0f1b2a;
-  --cui-color-surface: #192534;
-  --cui-color-surface-raised: #232f3e;
-  --cui-color-surface-hover: #232f3e;
-  --cui-color-text: #e9ebed;
-  --cui-color-text-muted: #a4afbd;
-  --cui-color-text-disabled: #7d8998;
-  --cui-color-border: #7d8998;
-  --cui-color-border-subtle: #414d5c;
-  --cui-color-border-disabled: #7d8998;
-  --cui-color-overlay: rgba(0, 7, 22, 0.7);
-  --cui-color-accent: #539fe5;
-  --cui-color-accent-hover: #89bdee;
-  --cui-color-accent-text: #75b3ec;
-  --cui-color-on-accent: #0f1b2a;
-  --cui-color-accent-subtle: #13304d;
-  --cui-color-info: #75b3ec;
-  --cui-color-info-bg: #12263d;
-  --cui-color-success: #4cc254;
+  --cui-color-bg: #111113;
+  --cui-color-surface: #18181b;
+  --cui-color-surface-raised: #202024;
+  --cui-color-surface-hover: #27272c;
+  --cui-color-surface-sunken: #141416;
+  --cui-color-text: #ececef;
+  --cui-color-text-muted: #a1a1aa;
+  --cui-color-text-disabled: #6b6b75;
+  --cui-color-border: #71717a;
+  --cui-color-border-subtle: #2e2e33;
+  --cui-color-border-disabled: #71717a;
+  --cui-color-overlay: rgba(0, 0, 0, 0.6);
+  --cui-color-accent: #3fb8a9;
+  --cui-color-accent-hover: #6fd0c3;
+  --cui-color-accent-text: #5ccbbd;
+  --cui-color-on-accent: #0b1514;
+  --cui-color-accent-subtle: #10302c;
+  --cui-color-info: #5ccbbd;
+  --cui-color-info-bg: #10302c;
+  --cui-color-success: #5cc878;
   --cui-color-success-bg: #10291a;
-  --cui-color-warning: #e0b84a;
-  --cui-color-warning-bg: #2b2410;
-  --cui-color-error: #ff8a8a;
-  --cui-color-error-bg: #33171b;
-  --cui-color-pending: #a4afbd;
-  --cui-color-stopped: #a4afbd;
-  --cui-color-topbar-bg: #000716;
-  --cui-color-topbar-text: #ffffff;
-  --cui-color-focus: #75b3ec;
-  --cui-shadow-s: 0 1px 2px rgba(0, 0, 0, 0.5);
-  --cui-shadow-m: 0 2px 8px rgba(0, 0, 0, 0.5);
-  --cui-shadow-l: 0 8px 24px rgba(0, 0, 0, 0.6);
+  --cui-color-warning: #e2b94e;
+  --cui-color-warning-bg: #2a2310;
+  --cui-color-error: #ff8f86;
+  --cui-color-error-bg: #33171a;
+  --cui-color-pending: #a1a1aa;
+  --cui-color-stopped: #a1a1aa;
+  --cui-color-topbar-bg: #18181b;
+  --cui-color-topbar-text: #ececef;
+  --cui-color-focus: #6fd0c3;
+  --cui-shadow-s: none;
+  --cui-shadow-m: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --cui-shadow-l: 0 16px 48px rgba(0, 0, 0, 0.6);
 }
 
 @media (prefers-reduced-motion: reduce) {

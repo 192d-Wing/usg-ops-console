@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { DEMO, TID, flashbar, gotoApp, politeRegion, query } from "./fixtures";
+import { DEMO, TID, flashbar, gotoApp, openScope, politeRegion, query } from "./fixtures";
 
 const site = (p: Page) => p.getByTestId(TID.site);
 const tenant = (p: Page) => p.getByTestId(TID.tenant);
@@ -61,28 +61,28 @@ test.describe("cascade: pickers", () => {
     await expect(tenant(page)).toBeDisabled();
     await expect(page.getByTestId("scope-tenant-hint")).toHaveText("Select a site first");
     await expect(tenant(page)).toHaveAttribute("aria-describedby", /scope-tenant-hint|\S+/);
-    await site(page).selectOption(DEMO.multiSite);
+    await (await openScope(page, "site")).selectOption(DEMO.multiSite);
     await expect(tenant(page)).toBeEnabled();
   });
 
   test("tenant list narrows to the selected site; env list narrows to (site, tenant)", async ({ page }) => {
     await gotoApp(page, "/");
-    await site(page).selectOption(DEMO.multiSite);
+    await (await openScope(page, "site")).selectOption(DEMO.multiSite);
     const multiTenants = await optionValues(tenant(page));
     expect(multiTenants[0]).toBe("");
     expect(multiTenants).toContain(DEMO.sharedTenant);
     expect(multiTenants).toContain(DEMO.multiOnlyTenant);
 
-    await site(page).selectOption(DEMO.singleTenantSite);
+    await (await openScope(page, "site")).selectOption(DEMO.singleTenantSite);
     const single = (await optionValues(tenant(page))).filter((v) => v !== "");
     expect(single).toHaveLength(1);
 
-    await site(page).selectOption(DEMO.otherSite);
+    await (await openScope(page, "site")).selectOption(DEMO.otherSite);
     const other = await optionValues(tenant(page));
     expect(other).toContain(DEMO.sharedTenant);
     expect(other).not.toContain(DEMO.multiOnlyTenant);
 
-    await tenant(page).selectOption(DEMO.sharedTenant);
+    await (await openScope(page, "tenant")).selectOption(DEMO.sharedTenant);
     const envs = await optionValues(env(page));
     expect(envs).toContain(DEMO.sharedEnv);
     expect(envs).not.toContain(DEMO.multiOnlyEnv);
@@ -90,7 +90,7 @@ test.describe("cascade: pickers", () => {
 
   test("changing site keeps a tenant valid at both sites", async ({ page }) => {
     await gotoApp(page, `/?site=${DEMO.multiSite}&tenant=${DEMO.sharedTenant}`);
-    await site(page).selectOption(DEMO.otherSite);
+    await (await openScope(page, "site")).selectOption(DEMO.otherSite);
     await expect(tenant(page)).toHaveValue(DEMO.sharedTenant);
     await expect.poll(() => query(page)["tenant"]).toBe(DEMO.sharedTenant);
   });
@@ -98,7 +98,7 @@ test.describe("cascade: pickers", () => {
   test("changing site clears an invalid tenant/env and announces it politely", async ({ page }) => {
     await gotoApp(page, `/?site=${DEMO.multiSite}&tenant=${DEMO.multiOnlyTenant}`);
     await expect(tenant(page)).toHaveValue(DEMO.multiOnlyTenant);
-    await site(page).selectOption(DEMO.otherSite);
+    await (await openScope(page, "site")).selectOption(DEMO.otherSite);
     await expect(tenant(page)).toHaveValue("");
     await expect(env(page)).toHaveValue("");
     await expect.poll(() => query(page)).toEqual({ site: DEMO.otherSite });
@@ -122,7 +122,7 @@ test.describe("cascade: pickers", () => {
     });
     const seen = (): Promise<string[]> =>
       page.evaluate(() => (window as unknown as { __ann: string[] }).__ann.filter((t) => t !== ""));
-    await site(page).selectOption(DEMO.otherSite);
+    await (await openScope(page, "site")).selectOption(DEMO.otherSite);
     await expect(politeRegion(page)).toHaveText(msg);
     await expect.poll(seen).toEqual([msg]);
     // Back restores (site, tenant) from the URL without touching the region,
@@ -130,13 +130,14 @@ test.describe("cascade: pickers", () => {
     await page.goBack();
     await expect(tenant(page)).toHaveValue(DEMO.multiOnlyTenant);
     await expect(politeRegion(page)).toHaveText(msg);
-    await site(page).selectOption(DEMO.otherSite);
+    await (await openScope(page, "site")).selectOption(DEMO.otherSite);
     await expect.poll(seen).toEqual([msg, msg]);
     await expect(politeRegion(page)).toHaveText(msg);
   });
 
   test("site field describes that it enables tenant and environment", async ({ page }) => {
     await gotoApp(page, "/");
+    await openScope(page, "site");
     const hint = page.getByTestId("scope-site-hint");
     await expect(hint).toHaveText("Selecting a site enables Tenant, then Environment");
     await expect(site(page)).toBeEnabled();
@@ -145,7 +146,7 @@ test.describe("cascade: pickers", () => {
 
   test("single-tenant site clears tenant and env together", async ({ page }) => {
     await gotoApp(page, `/?site=${DEMO.otherSite}&tenant=${DEMO.sharedTenant}&env=${DEMO.sharedEnv}`);
-    await site(page).selectOption(DEMO.singleTenantSite);
+    await (await openScope(page, "site")).selectOption(DEMO.singleTenantSite);
     await expect.poll(() => query(page)).toEqual({ site: DEMO.singleTenantSite });
     await expect(politeRegion(page)).toHaveText("Tenant and environment cleared: not available at West DC");
   });
@@ -153,7 +154,7 @@ test.describe("cascade: pickers", () => {
   test("changing site clears an env invalid for the new pair", async ({ page }) => {
     await gotoApp(page, `/?site=${DEMO.multiSite}&tenant=${DEMO.sharedTenant}&env=${DEMO.multiOnlyEnv}`);
     await expect(env(page)).toHaveValue(DEMO.multiOnlyEnv);
-    await site(page).selectOption(DEMO.otherSite);
+    await (await openScope(page, "site")).selectOption(DEMO.otherSite);
     await expect(tenant(page)).toHaveValue(DEMO.sharedTenant);
     await expect(env(page)).toHaveValue("");
     await expect.poll(() => query(page)["env"]).toBeUndefined();
@@ -204,7 +205,7 @@ test.describe("cascade: history", () => {
     const start = await page.evaluate(() => history.length);
 
     // One change that cascades (tenant cleared) = one history entry.
-    await site(page).selectOption(DEMO.otherSite);
+    await (await openScope(page, "site")).selectOption(DEMO.otherSite);
     await expect.poll(() => query(page)).toEqual({ site: DEMO.otherSite });
     expect(await page.evaluate(() => history.length)).toBe(start + 1);
 
@@ -227,7 +228,7 @@ test.describe("cascade: history", () => {
 
   test("scope is never written to localStorage", async ({ page }) => {
     await gotoApp(page, `/?site=${DEMO.multiSite}`);
-    await site(page).selectOption(DEMO.otherSite);
+    await (await openScope(page, "site")).selectOption(DEMO.otherSite);
     const dump = await page.evaluate(() => JSON.stringify({ ...window.localStorage }));
     expect(dump).not.toContain(DEMO.otherSite);
     expect(dump).not.toContain(DEMO.multiSite);
@@ -267,5 +268,67 @@ test.describe("QA: URL edge cases", () => {
     await expect(flashbar(page)).toContainText("Ignored invalid scope in URL: tenant");
     await expect(site(page)).toHaveValue(DEMO.multiSite);
     await expect(tenant(page)).toHaveValue("");
+  });
+});
+
+// Fix round 2 (A11Y-002): a non-embedded popover closes when focus Tabs out,
+// without pulling focus back.
+test.describe("popover focus-out (A11Y-002)", () => {
+  test.use({ viewport: { width: 1280, height: 800 } });
+  test("Tab out of the site popover closes it with aria-expanded=false; focus stays where it went", async ({ page, browserName }) => {
+    const tab = browserName === "webkit" ? "Alt+Tab" : "Tab";
+    await gotoApp(page, "/");
+    const trigger = page.getByTestId("scope-site-trigger");
+    const pop = page.getByTestId("scope-site-popover");
+    await openScope(page, "site");
+    await expect(page.getByTestId(TID.site)).toBeFocused();
+    let left = false;
+    for (let i = 0; i < 8 && !left; i++) {
+      await page.keyboard.press(tab);
+      left = await pop.evaluate((el) => !el.contains(document.activeElement));
+    }
+    expect(left, "focus left the popover").toBe(true);
+    await expect(pop).toBeHidden();
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    const where = await page.evaluate(() => document.activeElement?.getAttribute("data-testid") ?? document.activeElement?.tagName);
+    expect(where).not.toBe("BODY");
+    expect(where).not.toBe("scope-site-trigger");
+  });
+});
+
+// Fix round 2 (A11Y-004): segments show an at-rest boundary and chevron;
+// the disabled style differs (dashed, no chevron). No shell path disables a
+// segment today, so the disabled state is exercised by setting `disabled` on
+// the real button from the test (DOM only; production code untouched).
+test.describe("scope crumb affordance (A11Y-004)", () => {
+  test.use({ viewport: { width: 1280, height: 800 } });
+  test("enabled: solid border + visible chevron; disabled: dashed border, no chevron", async ({ page }) => {
+    await gotoApp(page, "/");
+    const seg = page.getByTestId("scope-site-trigger");
+    await page.mouse.move(1, 790);
+    const read = () =>
+      seg.evaluate((el) => {
+        const cs = getComputedStyle(el);
+        const chev = el.querySelector(".cui-scope-crumbs__chev");
+        const ccs = chev ? getComputedStyle(chev) : null;
+        return {
+          style: cs.borderTopStyle,
+          width: parseFloat(cs.borderTopWidth),
+          color: cs.borderTopColor,
+          bg: cs.backgroundColor,
+          chev: !!chev && ccs!.visibility === "visible" && ccs!.display !== "none" && chev.getBoundingClientRect().width > 0,
+        };
+      });
+    const on = await read();
+    expect(on.style, JSON.stringify(on)).toBe("solid");
+    expect(on.width).toBeGreaterThanOrEqual(1);
+    expect(on.chev, JSON.stringify(on)).toBe(true);
+    await seg.evaluate((el) => el.setAttribute("disabled", ""));
+    const off = await read();
+    expect(off.style, JSON.stringify(off)).toBe("dashed");
+    expect(off.chev, JSON.stringify(off)).toBe(false);
+    // Border colour is not compared: tokens.css sets --cui-color-border-disabled
+    // equal to --cui-color-border (3:1), so the difference is style + fill.
+    expect(off.bg).not.toBe(on.bg);
   });
 });

@@ -30,9 +30,17 @@ fn truncate(s: &str, max: u32) -> &str {
     }
 }
 
+/// Deprecated since M4.5: the shell uses [`crate::CommandPalette`]. Kept for
+/// tools; removal planned M6 (INT-004).
 // NIST 800-53: SI-10 - input length-bounded (maxlength + truncation)
-#[function_component]
-pub fn SearchInput(p: &SearchInputProps) -> Html {
+#[deprecated(note = "use CommandPalette; removal planned M6")]
+pub type SearchInput = SearchInputImpl;
+
+/// Implementation behind the deprecated [`SearchInput`] alias (the alias
+/// carries the deprecation, so the component macro itself stays clean).
+#[doc(hidden)]
+#[function_component(SearchInputImpl)]
+pub fn search_input(p: &SearchInputProps) -> Html {
     let id = use_id("search");
     let input = use_node_ref();
     let max = p.max_len;
