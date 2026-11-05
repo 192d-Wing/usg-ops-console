@@ -23,6 +23,18 @@ async fn tick() {
     yew::platform::time::sleep(std::time::Duration::from_millis(20)).await;
 }
 
+/// Wait (up to 1 s) for a re-render to settle `cond`; returns its last value.
+/// Headless Firefox on CI can need more than one 20 ms tick.
+async fn settle(cond: impl Fn() -> bool) -> bool {
+    for _ in 0..50 {
+        if cond() {
+            return true;
+        }
+        tick().await;
+    }
+    cond()
+}
+
 fn q(root: &Element, sel: &str) -> Element {
     root.query_selector(sel)
         .unwrap()
@@ -872,23 +884,19 @@ async fn rail_collapsed_keeps_text_names() {
         home.class_list().add_1(state).unwrap();
         assert!(shown(), "tip shown on {state}");
         key(&host, "Escape");
-        tick().await;
-        assert!(nav.has_attribute("data-tip-dismissed"));
+        assert!(settle(|| nav.has_attribute("data-tip-dismissed")).await);
         assert!(!shown(), "Escape hides tip on {state}");
         home.class_list().remove_1(state).unwrap();
         home.dispatch_event(&web_sys::MouseEvent::new("mouseleave").unwrap())
             .unwrap();
-        tick().await;
-        assert!(!nav.has_attribute("data-tip-dismissed"));
+        assert!(settle(|| !nav.has_attribute("data-tip-dismissed")).await);
     }
     style.remove();
     key(&host, "Escape");
-    tick().await;
-    assert!(nav.has_attribute("data-tip-dismissed"));
+    assert!(settle(|| nav.has_attribute("data-tip-dismissed")).await);
     home.dispatch_event(&web_sys::MouseEvent::new("mouseleave").unwrap())
         .unwrap();
-    tick().await;
-    assert!(!nav.has_attribute("data-tip-dismissed"));
+    assert!(settle(|| !nav.has_attribute("data-tip-dismissed")).await);
     assert_eq!(home.get_attribute("aria-current").as_deref(), Some("page"));
     assert_eq!(
         home.get_attribute("data-label").as_deref(),

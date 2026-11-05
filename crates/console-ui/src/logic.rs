@@ -730,11 +730,19 @@ mod tests {
             .collect();
         let kw: &[&str] = &["alpha", "beta"];
         let items: Vec<(&str, &[&str], u8)> = names.iter().map(|n| (n.as_str(), kw, 1)).collect();
-        let t = std::time::Instant::now();
-        for q in ["t", "tool", "ops", "zz", "tnfo"] {
-            let _ = rank_palette(q, &items);
-        }
-        assert!(t.elapsed().as_millis() < 10, "{:?}", t.elapsed()); // 5 queries, < 2ms each
+        // Best of 5 runs: the budget is unchanged, but one descheduled run on
+        // a shared CI host no longer decides the result.
+        let best = (0..5)
+            .map(|_| {
+                let t = std::time::Instant::now();
+                for q in ["t", "tool", "ops", "zz", "tnfo"] {
+                    let _ = rank_palette(q, &items);
+                }
+                t.elapsed()
+            })
+            .min()
+            .unwrap();
+        assert!(best.as_millis() < 10, "{best:?}"); // 5 queries, < 2ms each
     }
 
     #[test]
