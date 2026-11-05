@@ -3,7 +3,7 @@
 Status as of M4.5 (redesign), 2026-11-04. Target: WCAG 2.1 AA (Section
 508). This file holds conformance remarks for a future VPAT. It is not a
 full VPAT. M4 evidence is from local runs and CI run 41892456284 (Firefox
-included). **M4.5 evidence is from local runs only; CI has not run M4.5.**
+included). M4.5 evidence is from local runs and CI run [42014779167](https://github.com/192d-Wing/usg-ops-console/actions/runs/42014779167) (commit `b229338`, all jobs green, Firefox wasm and E2E included).
 
 Related evidence: axe scans (`e2e/tests/a11y.spec.ts`, Chromium only,
 POAM-012), keyboard and reflow specs, the token contrast test
@@ -70,8 +70,8 @@ end of this section.
   2). The E2E Escape cases ("Escape dismisses the hover tip…", "Escape
   dismisses the focus tip…", `rail.spec.ts:176` and `:196`) failed in QA
   round 2 (R2-D1) and pass after fixes round 3 on macOS Chromium and WebKit
-  and Linux Chromium, Firefox and WebKit (QA "Round 3 rerun"; local, CI
-  pending). The wasm test also asserts the tip's computed visibility.
+  and Linux Chromium, Firefox and WebKit (QA "Round 3 rerun"; also green in CI run
+  42014779167). The wasm test also asserts the tip's computed visibility.
 
 ### Command palette (combobox pattern)
 
@@ -175,7 +175,7 @@ VPAT remark for **SC 2.4.3 Focus Order** (also relevant to 2.1.1, 2.1.2,
 
 - axe runs on Chromium only (POAM-012).
 - M4.5: manual Windows High Contrast and VoiceOver checks not done
-  (POAM-046); rail tooltip Escape E2E not re-run after fixes round 3;
+  (POAM-046);
   sub-page styling in the collapsed rail (A11Y-003) checked visually only.
 - WebKit skips the native Tab/Shift+Tab tool tests (WebKit without Full
   Keyboard Access does not tab to links and buttons); F6 and the skip link
