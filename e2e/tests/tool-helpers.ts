@@ -162,3 +162,70 @@ export const toolTest = base.extend<{ signedIn: void }>({
   ],
   request: async ({ page, signedIn: _ }, use) => use(page.request),
 });
+
+// ---------------------------------------------------------------------------
+// M5 (plan U6): usg-dcim finch + otter-go as tool `dcim` (DCIM_REPO only).
+// ---------------------------------------------------------------------------
+
+/** DEV ONLY dcim realm users (deploy/compose/keycloak/realm-dev.json, U3). */
+export const DCIM_USERS = {
+  viewer: { username: "dcim_viewer", password: "dev-only-dcim_viewer", name: /dcim_viewer|DCIM Viewer/i },
+  operator: { username: "dcim_operator", password: "dev-only-dcim_operator", name: /dcim_operator|DCIM Operator/i },
+} as const;
+
+/** Fabrics seeded by e2e/servers/dcim-stack.mjs (slugs = console demo sites). Keep in sync. */
+export const DCIM_FABRICS = {
+  hq: { id: "0d1e2f30-0000-4000-8000-0000000000a1", slug: "hq", name: "E2E HQ Fabric" },
+  east: { id: "0d1e2f30-0000-4000-8000-0000000000a2", slug: "east", name: "E2E East Fabric" },
+} as const;
+
+export const DCIM_CSRF_HEADER = "X-DCIM-CSRF";
+
+/**
+ * Like `toolTest`, but signs in as a dcim realm user (default: viewer). Use
+ * `test.use({ dcimUser: DCIM_USERS.operator })` for the operator.
+ */
+export const dcimTest = base.extend<{ dcimUser: { username: string; password: string; name: RegExp }; signedIn: void }>({
+  dcimUser: [DCIM_USERS.viewer, { option: true }],
+  storageState: async ({}, use) => use(NO_AUTH),
+  signedIn: [
+    async ({ page, baseURL, dcimUser }, use) => {
+      await loginAt(page, baseURL!, "/", dcimUser);
+      await use();
+    },
+    { auto: true },
+  ],
+  request: async ({ page, signedIn: _ }, use) => use(page.request),
+});
+
+/** The dcim Frame (finch document on the dcim tool origin). */
+export async function dcimFrame(page: Page, origin: string) {
+  return toolFrameHandle(page, origin);
+}
+
+/** Open `/tools/dcim<path>` and wait until finch has rendered embedded (AppLayout main, no login form). */
+export async function openDcim(page: Page, origin: string, path = "/") {
+  await page.goto(`/tools/dcim${path}`);
+  const f = await dcimFrame(page, origin);
+  const fl = toolFrame(page);
+  await expect(fl.locator("main").first()).toBeVisible({ timeout: 30_000 });
+  return { frame: f, fl };
+}
+
+/** fetch() inside the finch document (same origin as the tool), returns status + text. */
+export async function dcimFetch(
+  frame: import("@playwright/test").Frame,
+  path: string,
+  init: { method?: string; headers?: Record<string, string>; body?: string } = {},
+): Promise<{ status: number; body: string }> {
+  return frame.evaluate(
+    async ([p, i]) => {
+      const r = await fetch(p, { credentials: "same-origin", ...i });
+      return { status: r.status, body: await r.text() };
+    },
+    [path, init] as const,
+  );
+}
+
+/** Proxy contract (docs/INTEGRATING-A-TOOL.md): the tool is served under `/t/<id>/` on its origin. */
+export const DCIM_BASE = "/t/dcim";

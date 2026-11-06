@@ -1,6 +1,7 @@
 # Accessibility conformance notes
 
-Status as of M4.5 (redesign), 2026-11-04. Target: WCAG 2.1 AA (Section
+Status as of M5 (finch embedded remarks added), 2026-11-05; shell
+remarks as of M4.5 (redesign), 2026-11-04. Target: WCAG 2.1 AA (Section
 508). This file holds conformance remarks for a future VPAT. It is not a
 full VPAT. M4 evidence is from local runs and CI run 41892456284 (Firefox
 included). M4.5 evidence is from local runs and CI run [42014779167](https://github.com/192d-Wing/usg-ops-console/actions/runs/42014779167) (commit `b229338`, all jobs green, Firefox wasm and E2E included).
@@ -171,9 +172,48 @@ VPAT remark for **SC 2.4.3 Focus Order** (also relevant to 2.1.1, 2.1.2,
   and on every Playwright upgrade; update this remark if the extra stop
   disappears or the ring stops showing.
 
+## Embedded tool: DCIM finch (M5)
+
+finch is a separate product (usg-dcim, branch `feat/console-embed`,
+**uncommitted**); these remarks cover only its embedded mode inside the
+console tool container. Evidence is local only (finch vitest 105/105;
+dcim E2E with `DCIM_REPO` on Chromium and WebKit locally and Firefox in
+the Linux container). CI never runs the finch specs.
+
+- **One set of chrome.** Embedded finch hides its Cloudscape top
+  navigation, side navigation, breadcrumbs and fabric picker; the console
+  rail, breadcrumbs and scope switcher are the only ones. The frame
+  document keeps one `<main>` and a page `h1`.
+- **Title and breadcrumbs (SC 2.4.2).** finch sends `setTitle`,
+  `setBreadcrumbs` and `pathChanged` on each route change; the frame
+  `document.title` uses the same text ("DCIM" on Home, "`<page> | DCIM`"
+  elsewhere).
+- **Theme (SC 1.4.3, 1.4.11).** finch follows the console theme; for
+  "system" it follows `prefers-color-scheme` and its changes (E2E
+  `dcim-ux.spec.ts` "system theme"). axe (Chromium only) on
+  `/tools/dcim/`, `/racks` and `/sites`, and in dark mode on `/racks` and
+  `/sites`: no serious or critical violations (`dcim-a11y.spec.ts`,
+  `dcim-ux.spec.ts`).
+- **Status messages (SC 4.1.3).** finch toasts are forwarded to the
+  console notification live region as plain text (non-string content
+  falls back to a generic message); finch renders no in-frame toaster.
+  Session end is announced once through a console notification; the
+  in-frame view has no `role="alert"`, and focus moves to its heading. A
+  failed retry shows a `role="status"` note referenced by the heading's
+  `aria-describedby`.
+- **Unmatched scope (SC 3.3.1).** When the console `site` has no DCIM
+  fabric, finch shows an inline info alert (`No DCIM fabric for site <site>. Change site in the console.`) instead of unfiltered data.
+- **Focus handoff.** finch uses the vendored SDK default `Focus`
+  handling and F6 / Shift+F6 `FocusShell`; it does not override them.
+  **Not covered by E2E** for finch (POAM-056).
+
 ## Known gaps
 
 - axe runs on Chromium only (POAM-012).
+- M5 finch embedded: no E2E for the skip link or F6 into finch, no 320 px
+  reflow check in the container, no axe scan of the session-ended view,
+  no manual screen reader pass (POAM-056). Plain links opened in a new
+  tab lose the `/t/dcim` prefix (POAM-057).
 - M4.5: manual Windows High Contrast and VoiceOver checks not done
   (POAM-046);
   sub-page styling in the collapsed rail (A11Y-003) checked visually only.

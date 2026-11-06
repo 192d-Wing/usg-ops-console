@@ -703,6 +703,75 @@ upstream = "https://evil.internal:8443"
         parse("reg.toml", text, &console(), dev, &mut Vec::new())
     }
 
+    /// `${CONSOLE_*}` rendering as `make tools-registries` does, from ports.env.
+    fn render_dev_registry(text: &str) -> String {
+        let ports: std::collections::HashMap<&str, &str> =
+            include_str!("../../../deploy/compose/ports.env")
+                .lines()
+                .filter(|l| !l.trim_start().starts_with('#'))
+                .filter_map(|l| l.split_once('='))
+                .collect();
+        let mut out = text.to_owned();
+        let mut from = 0;
+        while let Some(rel) = out[from..].find("${CONSOLE_") {
+            let start = from + rel;
+            let end = start + out[start..].find('}').unwrap();
+            let key = &out[start + 2..end];
+            if !key
+                .bytes()
+                .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+            {
+                from = end; // e.g. the `${CONSOLE_*}` in header comments
+                continue;
+            }
+            let val = *ports.get(key).unwrap_or_else(|| panic!("unset {key}"));
+            out.replace_range(start..=end, val);
+            from = start;
+        }
+        out
+    }
+
+    #[test]
+    fn dev_registries_parse_and_include_dcim() {
+        for (name, text, dcim_port_key) in [
+            (
+                "registry.main.toml",
+                include_str!("../../../deploy/compose/tools/registry.main.toml"),
+                "CONSOLE_TLS_PORT_TOOL_DCIM=",
+            ),
+            (
+                "registry.run.toml",
+                include_str!("../../../deploy/compose/tools/registry.run.toml"),
+                "CONSOLE_TLS_PORT_TOOL_DCIM_RUN=",
+            ),
+        ] {
+            let tools = parse(
+                name,
+                &render_dev_registry(text),
+                &Url::parse("https://localhost:9443").unwrap(),
+                true,
+                &mut Vec::new(),
+            )
+            .unwrap_or_else(|e| panic!("{name}: {e}"));
+            let d = tools.iter().find(|t| t.id == "dcim").expect(name);
+            assert_eq!(d.required_roles, ["dcim:viewer"]);
+            assert_eq!(d.forward_roles, ["dcim:"]);
+            assert_eq!(d.scopes, ["site"]);
+            assert_eq!(d.forward_headers, ["x-dcim-csrf"]);
+            let port = include_str!("../../../deploy/compose/ports.env")
+                .lines()
+                .find_map(|l| l.strip_prefix(dcim_port_key))
+                .unwrap();
+            assert_eq!(d.host, format!("localhost:{port}"), "{name}: own origin");
+            // hello is still present and keeps its own origin.
+            assert!(tools.iter().any(|t| t.id == "hello" && t.host != d.host));
+            assert_eq!(
+                d.forwarded_roles(&["dcim:operator".into(), "hello:user".into()]),
+                ["dcim:operator"]
+            );
+        }
+    }
+
     #[test]
     fn parses_good_registry_with_defaults() {
         let tools = try_parse(GOOD, false).unwrap();

@@ -182,3 +182,168 @@ fn tools_v1_minimal_and_extended_shapes_parse() {
     assert!(c.roles.is_empty());
     assert_eq!(c.acr, None);
 }
+
+// ---- Shared corpus (fixtures/MANIFEST.json, format in fixtures/README.md) ----
+// The same manifest drives console-sdk and sdk-js, so all implementations
+// agree on every case.
+
+fn manifest() -> Value {
+    serde_json::from_str(&fs::read_to_string(dir("MANIFEST.json")).unwrap()).unwrap()
+}
+
+fn entries(m: &Value) -> &Vec<Value> {
+    m["fixtures"].as_array().unwrap()
+}
+
+fn s<'a>(e: &'a Value, k: &str) -> &'a str {
+    e[k].as_str().unwrap_or_default()
+}
+
+/// Message text per the README: file contents, trailing whitespace removed.
+fn message(file: &str) -> String {
+    fs::read_to_string(dir(file)).unwrap().trim_end().to_owned()
+}
+
+fn variant(v: &Value) -> &str {
+    v["type"].as_str().unwrap_or_default()
+}
+
+/// Decode per direction; `Ok(Some(json))` is the re-encoded message.
+fn decode_sdk(
+    direction: &str,
+    data: &str,
+) -> Result<Option<Value>, console_protocol::MessageError> {
+    Ok(match direction {
+        "shell-to-tool" => ShellToTool::from_json(data)?
+            .map(|m| serde_json::from_str(&m.to_json().unwrap()).unwrap()),
+        "tool-to-shell" => ToolToShell::from_json(data)?
+            .map(|m| serde_json::from_str(&m.to_json().unwrap()).unwrap()),
+        other => panic!("unknown direction {other}"),
+    })
+}
+
+fn http_round_trip<T: Serialize + DeserializeOwned>(json: &str) -> Value {
+    serde_json::to_value(serde_json::from_str::<T>(json).unwrap()).unwrap()
+}
+
+#[test]
+fn manifest_header_matches_constants() {
+    let m = manifest();
+    assert_eq!(m["format"], "usg-ops-console.protocol-fixtures");
+    assert_eq!(m["format_version"], 1);
+    assert_eq!(m["protocol"], console_protocol::PROTOCOL_VERSION);
+    assert_eq!(
+        m["limits"]["max_message_bytes"],
+        console_protocol::MAX_MESSAGE_BYTES
+    );
+    assert_eq!(
+        m["limits"]["max_notify_chars"],
+        console_protocol::MAX_NOTIFY_CHARS
+    );
+}
+
+#[test]
+fn manifest_covers_every_file_and_every_variant() {
+    let m = manifest();
+    let mut listed = std::collections::BTreeSet::new();
+    for e in entries(&m) {
+        assert!(dir(s(e, "file")).is_file(), "missing {}", s(e, "file"));
+        listed.insert(s(e, "file").to_owned());
+        if let Some(c) = e["canonical"].as_str() {
+            assert!(dir(c).is_file(), "missing canonical {c}");
+            listed.insert(c.to_owned());
+        }
+        let valid = e["valid"].as_bool().unwrap();
+        match s(e, "expect") {
+            "decode" | "ignore" => assert!(valid, "{}", s(e, "file")),
+            "malformed" | "too_large" => assert!(!valid, "{}", s(e, "file")),
+            other => panic!("unknown expect {other}"),
+        }
+    }
+    for d in ["sdk_v1", "sdk_v1_cases", "tools_v1"] {
+        for (n, _) in fixtures(d) {
+            let f = format!("{d}/{n}");
+            assert!(listed.contains(&f), "{f} not in MANIFEST.json");
+        }
+    }
+    let decoded = |dir: &str, ty: &str| {
+        entries(&m)
+            .iter()
+            .any(|e| s(e, "direction") == dir && s(e, "type") == ty && s(e, "expect") == "decode")
+    };
+    for ty in [
+        "Init",
+        "ScopeChanged",
+        "ThemeChanged",
+        "Navigate",
+        "SessionRefreshed",
+        "Focus",
+    ] {
+        assert!(decoded("shell-to-tool", ty), "no valid fixture for {ty}");
+    }
+    for ty in [
+        "Ready",
+        "SetTitle",
+        "SetBreadcrumbs",
+        "Notify",
+        "SetBadge",
+        "NavigateConsole",
+        "RequestSessionRefresh",
+        "PathChanged",
+        "FocusShell",
+    ] {
+        assert!(decoded("tool-to-shell", ty), "no valid fixture for {ty}");
+    }
+    for case in [
+        "unknown-type",
+        "oversize",
+        "extra-field",
+        "missing-optional",
+        "malformed",
+    ] {
+        assert!(
+            entries(&m).iter().any(|e| s(e, "case") == case),
+            "no {case} case"
+        );
+    }
+}
+
+#[test]
+fn manifest_expectations_hold() {
+    use console_protocol::MessageError;
+    let m = manifest();
+    for e in entries(&m) {
+        let file = s(e, "file");
+        let data = message(file);
+        let want = e["canonical"].as_str().unwrap_or(file);
+        if s(e, "kind") == "http-json" {
+            let got = match s(e, "type") {
+                "ToolsResponse" => http_round_trip::<ToolsResponse>(&data),
+                "LaunchRequest" => http_round_trip::<LaunchRequest>(&data),
+                "LaunchResponse" => http_round_trip::<LaunchResponse>(&data),
+                "ToolContext" => http_round_trip::<ToolContext>(&data),
+                "AssertionClaims" => http_round_trip::<AssertionClaims>(&data),
+                "AuthErrorBody" => http_round_trip::<console_protocol::AuthErrorBody>(&data),
+                other => panic!("unknown schema {other}"),
+            };
+            let orig: Value = serde_json::from_str(&message(want)).unwrap();
+            assert_eq!(got, orig, "{file}");
+            continue;
+        }
+        let got = decode_sdk(s(e, "direction"), &data);
+        match (s(e, "expect"), got) {
+            ("decode", Ok(Some(v))) => {
+                assert_eq!(variant(&v), s(e, "type"), "{file}");
+                let orig: Value = serde_json::from_str(&message(want)).unwrap();
+                assert_eq!(v, orig, "{file}");
+            }
+            ("ignore", Ok(None)) => {}
+            ("malformed", Err(MessageError::Malformed(_))) => {}
+            ("too_large", Err(MessageError::TooLarge(n))) => {
+                assert_eq!(n, data.len(), "{file}");
+                assert!(n > console_protocol::MAX_MESSAGE_BYTES, "{file}");
+            }
+            (want, got) => panic!("{file}: expected {want}, got {got:?}"),
+        }
+    }
+}

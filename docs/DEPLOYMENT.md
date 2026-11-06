@@ -339,6 +339,11 @@ none of these files are in the image build context (`.containerignore`).
    internal CA, so accept the certificate warning). `make run` loads
    `deploy/compose/gateway.env.example`, which sets
    `CONSOLE_MIGRATOR_DATABASE_URL` so the gateway migrates at startup.
+   It serves its own shell build from `crates/console-shell/dist-run`
+   (`make web-run`), so `make e2e` or `make check` rebuilding
+   `dist-gallery` does not break a running stack. The gateway pins the CSP
+   to the inline-script hash in `index.html` at startup, so restart
+   `make run` to pick up new shell code.
 
 3. Stop with `make down`, or `make down-clean` to also delete volumes.
    Recreate volumes (`make down-clean`) after pulling M3 round-1 changes:
@@ -352,9 +357,28 @@ none of these files are in the image build context (`.containerignore`).
    serves it at `https://localhost:9449`. Run `make down-clean` once after
    pulling M4 (migration 0006 is new).
 
+5. M5: after pulling M5, run `make down && make up` once. The Keycloak
+   realm must be re-imported (new DEV ONLY users `dcim_viewer` and
+   `dcim_operator`) and a running Caddy (`tls-proxy`) must be recreated
+   to listen on the new DCIM tool ports 9454/9455. `make run` lists the
+   DCIM tool for users with `dcim:viewer`, but does **not** start finch
+   or otter-go: unless they run on 127.0.0.1:8094 (see
+   [DCIM tool](#dcim-tool-usg-dcim-m5)), `/t/dcim/*` returns 502 and the
+   console and hello are unaffected.
+
 The example `examples/hello-tool/Containerfile` is a template for tool
 images (build from the repo root). It is not part of the release image
 and is **not built in CI** (unverified build).
+
+### Clock drift in the podman VM (macOS)
+
+DEV environment only. During M5 E2E the podman VM clock fell 37 minutes
+(and later 9m41s) behind the host. Keycloak then issues id_tokens the
+gateway sees as expired, and every console sign-in fails with
+"id_token rejected: Expired" (this also breaks `make run`). Compare
+`date -u` with `podman machine ssh date -u`; resync with
+`podman machine ssh sudo chronyc -a makestep`, or
+`podman machine stop && podman machine start`.
 
 ### Port clashes
 
@@ -377,5 +401,90 @@ Clear it with:
 podman machine stop && podman machine start
 ```
 
+M5 adds DCIM ports: tool origins 9454 (main gateway) and 9455 (run
+gateway), finch nginx upstream 8094, otter-go 8095, DCIM Postgres 5442.
+
 On Linux or in CI, add the host-network override:
 `COMPOSE="docker compose" COMPOSE_FILES="-f deploy/compose/compose.yaml -f deploy/compose/compose.hostnet.yaml"`.
+
+## DCIM tool (usg-dcim, M5)
+
+DCIM is the usg-dcim finch SPA (served by nginx) and its otter-go
+backend. Its code is in the usg-dcim repository (branch
+`feat/console-embed`, **uncommitted**); this section lists what the
+console side and an operator must configure. Evidence is local only.
+
+### Console side (`deploy/compose/`, DEV ONLY values)
+
+| Key / file | Value | Notes |
+| --- | --- | --- |
+| `CONSOLE_TLS_PORT_TOOL_DCIM` | 9454 | DCIM tool origin on the main (E2E) gateway |
+| `CONSOLE_TLS_PORT_TOOL_DCIM_RUN` | 9455 | DCIM tool origin on the `make run` gateway |
+| `CONSOLE_PORT_DCIM_UPSTREAM` | 8094 | finch nginx (registry `upstream`, loopback http) |
+| `CONSOLE_PORT_DCIM_API` | 8095 | otter-go, behind nginx; never browser-facing |
+| `CONSOLE_PORT_DCIM_PG` | 5442 | DCIM's own Postgres (not the console database) |
+| `tools/registry.main.toml`, `registry.run.toml` | `id = "dcim"` | `required_roles = ["dcim:viewer"]`, `forward_roles = ["dcim:"]`, `scopes = ["site"]`, `audit_writes = true`, `forward_headers = ["x-dcim-csrf"]`, nav Sites/Racks/IPAM. Test `registry::tests::dev_registries_parse_and_include_dcim` |
+| `keycloak/realm-dev.json` | realm roles | `dcim:viewer`; `dcim:operator` (composite of viewer); `dcim:admin` (composite of operator and viewer). Users `dcim_viewer`, `dcim_operator` (password `dev-only-<name>`) |
+
+The finch build must match the tool id: the gateway serves DCIM under
+`/t/dcim/`, so build finch with `VITE_BASE=/t/dcim/ npm run build`
+(`dist/index.html` must reference `/t/dcim/assets/`). A plain
+`npm run build` is the standalone build.
+
+### otter-go keys (console auth mode)
+
+| Key | Default | Notes |
+| --- | --- | --- |
+| `OTTER_AUTH_MODE` | `standalone` | `standalone`, `console` or `both`; any other value stops startup. `console` refuses standalone login (`/auth/login`, `/logout`, `/refresh`, `/oidc/*` 404); `both` keeps it |
+| `OTTER_CONSOLE_JWKS_URL` | required | Console JWKS, e.g. the gateway's internal `/.well-known/jwks.json`. https required unless the host is loopback |
+| `OTTER_CONSOLE_ISSUER` | required | Exact console origin (`iss`) |
+| `OTTER_CONSOLE_TOOL_ID` | `dcim` | Required `aud`; must equal the registry id |
+| `OTTER_CONSOLE_REQUIRED_ACR` | required | Comma-separated exact allow-list; a missing `acr` is rejected. Production value: POAM-028 |
+| `OTTER_CONSOLE_LEEWAY_SECS` | 30 | Clamped to 0..30 |
+| `OTTER_CONSOLE_JWKS_REFRESH_SECS` | 300 | Max key age is the larger of 10 min and 2 x refresh |
+| `OTTER_CONSOLE_UPSTREAM_ISSUER` | "" | The Keycloak issuer behind the console. Required, and must equal `DCIM_OIDC_ISSUER`, when that is set; otherwise startup fails (POAM-054) |
+| `OTTER_CONSOLE_DEV_ACR_ALLOWED` | false | **DEV ONLY.** Must be true to allow an `acr` containing `:dev:` (the dev realm's `urn:usg-ops-console:dev:password`). Never set in production |
+| `OTTER_CONSOLE_JWKS_ALLOW_HTTP` | false | **DEV ONLY.** Allows an http JWKS URL on a non-loopback host. Never set in production |
+| `DCIM_JWT_SECRET` | — | Not used in `console` mode. Required in `both` mode (startup exits without it) |
+
+`db/dev/console_role_mappings.sql` in usg-dcim is **DEV ONLY**: it
+creates dev roles mapped to `dcim:viewer`/`dcim:operator`/`dcim:admin`.
+Production maps roles through otter-go's OIDC role-mapping admin API; the
+migration `00070_console_dcim_admin_mapping.sql` maps only `dcim:admin`.
+
+### Production requirements (not enforced by code)
+
+- Run a single otter-go replica until the `jti` replay cache has a shared
+  store (POAM-052).
+- Use https or mTLS from the gateway to finch nginx and from nginx to
+  otter-go, and a NetworkPolicy that admits ingress to finch nginx only
+  from the gateway pods (otter-go only from nginx, plus API-token
+  clients if used). finch nginx forwards `X-Console-Assertion`, so
+  direct reachability lets a captured assertion be replayed within its
+  window (POAM-053).
+- Every existing `users.sso_subject` row in DCIM must come from the same
+  IdP and realm as the console (POAM-054).
+
+### E2E (local only)
+
+The DCIM specs (`e2e/tests/dcim*.spec.ts`) run only when `DCIM_REPO`
+points at a usg-dcim checkout; without it they are ignored and the suite
+is unchanged. CI does not run them.
+
+```bash
+cd e2e && DCIM_REPO=~/Dev/usg-dcim npx playwright test \
+  tests/dcim.spec.ts tests/dcim-security.spec.ts tests/dcim-a11y.spec.ts \
+  tests/dcim-ux.spec.ts --project=chromium --project=webkit
+```
+
+`e2e/servers/dcim-stack.mjs` starts a digest-pinned TimescaleDB container
+on 5442 (tmpfs), runs the otter-go migrations and the DEV ONLY role
+mappings, starts otter-go in `console` mode on 8095 against the main
+gateway's JWKS (with `OTTER_CONSOLE_DEV_ACR_ALLOWED=true`), builds finch
+with `VITE_BASE=/t/dcim/` (skip with `DCIM_SKIP_FINCH_BUILD=1` when
+`dist/` is already a console build) and serves it with a digest-pinned
+nginx on 8094. Set `CONSOLE_PORT_HELLO_UPSTREAM=8096` if a `make run`
+hello server already holds 8090. Firefox: run through the Linux
+Playwright container (`make e2e-linux` pattern). After an E2E run, finch's
+`dist/` is the console build; run a plain `npm run build` before using
+finch standalone.

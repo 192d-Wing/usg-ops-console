@@ -47,3 +47,30 @@ title = "Denied Tool (E2E)"
 origin = "https://localhost:59999"
 upstream = "http://127.0.0.1:${CONSOLE_PORT_HELLO_UPSTREAM}"
 required_roles = ["nobody:none"]
+
+# M5 (plan U3): usg-dcim finch + otter-go. Upstream is finch's nginx, which
+# serves dist/ and proxies /api to otter-go (console auth mode verifies the
+# assertion). Gate role dcim:viewer; dcim:operator/admin are Keycloak
+# composites of it. Upstream down -> only /t/dcim/ answers 502.
+[[tool]]
+id = "dcim"
+title = "DCIM"
+category = "Infrastructure"
+icon = "server"
+origin = "https://localhost:${CONSOLE_TLS_PORT_TOOL_DCIM}"
+upstream = "http://127.0.0.1:${CONSOLE_PORT_DCIM_UPSTREAM}"
+required_roles = ["dcim:viewer"]
+forward_roles = ["dcim:"]
+scopes = ["site"]
+entry = "/"
+audit_writes = true
+forward_headers = ["x-dcim-csrf"]
+[[tool.nav]]
+label = "Sites"
+path = "/sites"
+[[tool.nav]]
+label = "Racks"
+path = "/racks"
+[[tool.nav]]
+label = "IPAM"
+path = "/ipam"

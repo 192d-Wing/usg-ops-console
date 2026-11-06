@@ -1,6 +1,7 @@
 # NIST SP 800-53 Rev. 5 control mapping
 
-Status as of M4 (tool registry, authenticated reverse proxy, per-tool
+Status as of M5 (sdk-js; DCIM tool-side entries), 2026-11-05. Earlier
+status: M4 (tool registry, authenticated reverse proxy, per-tool
 origins, identity assertion, tool container, SDK v1), 2026-11-04.
 This file describes only what the code in this repository does today.
 
@@ -35,6 +36,18 @@ container (chromium, firefox, webkit; prodlike excluded) 428 passed, 3
 failed (Linux WebKit Keycloak sign-in flake, POAM-044; rerun 43/43). An
 M4 "Implemented" status means implemented with local test evidence; CI
 confirmation is outstanding for every M4 row.
+
+**M5 evidence scope.** M5 (sdk-js and the DCIM tool, 2026-11-05) has
+**local evidence only; CI has not run M5.** The DCIM rows below describe
+code in the separate usg-dcim repository (`packages/otter-go`,
+`packages/finch`), which is **uncommitted** on its branch
+`feat/console-embed`; they are tool-side controls, not console controls.
+Local runs (QA U6 round 3): otter-go `go test -race -count=1 ./...` 49
+packages ok; finch vitest 105/105; `make sdk-js-test` 82/82; `cargo test
+-p console-protocol -p console-sdk` 31 passed; dcim Playwright specs (only
+when `DCIM_REPO` is set) 39 passed / 5 skipped on Chromium and WebKit, and
+16 passed / 1 timeout (passed 4/4 on repeat, timeout then raised) on
+Firefox in the Linux container. The finch E2E never runs in CI.
 
 ## Summary
 
@@ -77,6 +90,13 @@ confirmation is outstanding for every M4 row.
 | RA-5 / SI-2 Dependency vulnerability scanning | Partial (POAM-033 added in M4) | M0-M4 |
 | PL-8 Security architecture (scope is a UI filter only; M4 `ctx` claim is a selection) | Partial (documented design rule) | M2-M4 |
 | CM-3, CM-6 Configuration change control (registry TOML, fail-closed validation) | Implemented (M4, local evidence; deviation POAM-037) | M4 |
+| Tool-side (DCIM / otter-go) AC-2 account linking and deactivation | Partial (M5, local evidence, usg-dcim uncommitted; POAM-051, POAM-054) | M5 |
+| Tool-side (DCIM / otter-go) AC-3 role mapping, CSRF, no bearer fallback | Partial (M5, local evidence; console path implemented, standalone fail-open POAM-050) | M5 |
+| Tool-side (DCIM / otter-go) IA-2(12) required `acr` | Implemented (M5, local evidence; dependency: production `acr`, POAM-028) | M5 |
+| Tool-side (DCIM / otter-go) SC-23 assertion verification and `jti` replay cache | Partial (M5, local evidence; per-process cache POAM-052) | M5 |
+| Tool-side (DCIM) SC-8, SC-7 internal hops | Planned (plaintext in dev; POAM-053) | Before production |
+| Tool-side (DCIM / otter-go) CM-7 console mode disables standalone routes | Implemented (M5, local evidence) | M5 |
+| Tool-side (DCIM / otter-go) AU-2, AU-3, AU-4, AU-5 console auth audit rows | Partial (M5, local evidence; per-IP limiter drops rows by design) | M5 |
 
 Session details: [SESSION_MANAGEMENT.md](SESSION_MANAGEMENT.md). Audit
 details: [AUDIT_LOGGING.md](AUDIT_LOGGING.md). Unless a path is given,
@@ -976,9 +996,138 @@ POA&M (POAM-001, POAM-002, POAM-014, POAM-033).
 These are gates, not tests of the system. Flaw remediation (SI-2) has no
 process documented in code yet.
 
+## Tool-side controls: DCIM (otter-go console auth mode, M5)
+
+Scope: the usg-dcim repository, `packages/otter-go` (and `packages/finch`
+where noted), branch `feat/console-embed`, **uncommitted**. Evidence is
+local only (see "M5 evidence scope"). Paths below are relative to
+`packages/otter-go/` unless stated. Unit tests are in
+`internal/auth/console_test.go` and `internal/auth/console_fix_test.go`
+unless stated. The console side (gateway minting `jti` and `acr`) is
+covered by `assertion::tests::jti_unique_and_acr_wire_format` and the dev
+registry by `registry::tests::dev_registries_parse_and_include_dcim` in
+this repo.
+
+### AC-2 Account management (tool side)
+
+**Status: Partial.** Console users are linked by `users.sso_subject = sub`
+(the same column the standalone OIDC flow writes); email is never used.
+A missing user is created just in time with a synthetic email and audited
+as `auth.console_jit_create`; a concurrent create that hits the unique
+constraint re-reads the row and re-applies the inactive check. Inactive
+accounts get 403 and are re-read on every request; only active accounts
+are cached, for 15 s. Startup refuses `console`/`both` mode unless
+`OTTER_CONSOLE_UPSTREAM_ISSUER` equals `DCIM_OIDC_ISSUER` when that is set
+(`CheckUpstreamIssuer`). Tests: `TestDispatch_JITAndRoleMapping`,
+`TestDispatch_LinksExistingAccountAndRejectsInactive`,
+`TestDispatch_InactiveAuditedAndNotCached`,
+`TestResolveUser_JITUniqueViolationRereads`, `TestCheckUpstreamIssuer`.
+Gaps: the admin deactivate API does not call `InvalidateUser` and other
+replicas wait up to 15 s (POAM-051); the issuer is not stored per row
+(POAM-054).
+
+### AC-3 Access enforcement (tool side)
+
+**Status: Partial.** In console mode a request with `X-Console-Assertion`
+takes the console path; an invalid assertion is 401 with no fallback to
+bearer, and an assertion together with `Authorization` is 401. Without an
+assertion only a `Bearer dcim_...` API token is accepted. Capabilities are
+the union of per-user DB grants and `oidc_role_mappings` for assertion
+roles with the `dcim:` prefix (the gateway forwards only `dcim:` roles,
+`forward_roles`); per-fabric scopes come from the same query as standalone.
+A scope query error on the console path is 503 (fail closed). Writes
+(any method except GET/HEAD/OPTIONS) on the console path need
+`X-DCIM-CSRF: 1`, which the gateway forwards (`forward_headers`). The
+console's `site` scope is a selection only; otter-go does not authorize
+from `ctx`. Tests: `TestDispatch` (mode table, no fallback, CSRF),
+`TestDispatch_NoDcimRoleGets403OnHandler`,
+`TestDispatch_ScopeErrorFailsClosed`; E2E (local, `DCIM_REPO`)
+`dcim-security.spec.ts` (user without `dcim:viewer` gets 404 and no rail
+entry, viewer write refused, missing CSRF refused, spoofed identity
+headers stripped, direct otter-go access without assertion 401).
+Gap: the standalone path still fails open on a scope query error
+(POAM-050).
+
+### IA-2(12) Acceptance of PIV credentials (tool side)
+
+**Status: Implemented (dependency: POAM-028).** otter-go requires `acr`
+to be present and in `OTTER_CONSOLE_REQUIRED_ACR` (exact match); a
+missing `acr` is rejected. A required value containing `:dev:` is refused
+at startup unless `OTTER_CONSOLE_DEV_ACR_ALLOWED=true` (DEV ONLY), and
+`Principal.MFA` is false for a dev `acr`. Tests:
+`TestConsoleVerify_Rejections` (missing acr, wrong acr),
+`TestConsoleVerifier_DevACRRequiresFlagAndIsNotMFA`. The production
+CAC `acr` value is not confirmed (POAM-028).
+
+### SC-23 Session authenticity (tool side)
+
+**Status: Partial.** otter-go verifies each assertion: one header, at
+most 8 KiB, `typ=console-assertion+jwt`, `alg=ES256` pinned, `kid`
+required and selected from the console JWKS, signature, exact `iss`,
+single `aud = dcim`, `exp`/`nbf`/`iat` required with leeway at most 30 s,
+`exp - iat <= 60`, bounded `sub`/`jti`/roles. Each `jti` is held until
+`exp + leeway` (at most 200k entries; full cache fails closed with 503).
+JWKS: fixed URL, https required off loopback (unless the DEV ONLY
+`OTTER_CONSOLE_JWKS_ALLOW_HTTP`), no redirects, 5 s timeout, 64 KiB, at
+most 16 EC P-256 keys, refetch at most once per 60 s, last good keys
+served, fail closed after max age. Tests: `TestConsoleVerify_Valid`,
+`TestConsoleVerify_Rejections` (24 cases), `TestConsoleVerify_Replay`,
+`TestReplayCache_BoundedAndSweeps`, `TestJWKS_KidRotationAndRateLimit`,
+`TestJWKS_ServesLastGoodThenFailsClosed`,
+`TestJWKS_ColdFetchFailureIsUnavailable`, `TestJWKS_Parse`,
+`TestJWKS_RequiresHTTPSOffLoopback`; E2E (local) `dcim-security.spec.ts`
+"consumed assertion replayed" and forged `alg=none` refused. Finch
+embedded mode sends no `Authorization` header and keeps no token in
+localStorage (finch `src/lib/http.embedded.test.ts`,
+`src/lib/auth-provider.embedded.test.ts`; E2E "no tool token"). Gap: the
+replay cache is per process (POAM-052).
+
+### SC-8, SC-7 Transmission and boundary (tool side)
+
+**Status: Planned.** In the dev and E2E stack the gateway reaches finch
+nginx over loopback http and nginx reaches otter-go over http. Nothing in
+either repo enforces https/mTLS or a NetworkPolicy for these hops
+(POAM-053). Production requirements are in
+[DEPLOYMENT.md](../DEPLOYMENT.md#dcim-tool-usg-dcim-m5).
+
+### CM-7 Least functionality (tool side)
+
+**Status: Implemented.** In `console` mode `/auth/login`, `/logout`,
+`/refresh` and `/oidc/*` return 404, and session JWTs are refused; in
+`both` mode they return 404 when an assertion header is present. Startup
+exits for `both` mode without `DCIM_JWT_SECRET` (startup check in
+`cmd/otter-go/main.go`; no unit harness). finch nginx answers
+`/_console/` with 404. Tests:
+`TestHandler_ConsoleModeRefusesStandaloneRoutesAndReportsMode`,
+`TestParseAuthMode`, `TestNewConsoleVerifier_RequiresConfig`; local stack
+probe (QA U6) `/auth/login` 404 in console mode.
+
+### AU-2, AU-3, AU-4, AU-5 Audit (tool side)
+
+**Status: Partial.** Every assertion rejection (401/503, including a
+missing assertion in console mode) and every inactive-account 403 writes
+`auth.console_reject` with a fixed `reason`, `actor_ip` (TCP peer) and no
+token or claim content; JIT creation writes `auth.console_jit_create`.
+Console-authenticated audit rows carry `console_sid`, `console_jti` and
+`upstream_issuer` metadata. Records:
+[AUDIT_LOGGING.md](AUDIT_LOGGING.md#tool-side-records-dcim-otter-go-m5).
+Volume (AU-4/AU-5 trade-off): reject rows are limited to 10 per 10 s per
+source IP (LRU of 4096 IPs) and 100 per 10 s overall; suppressed rows are
+counted per reason and reported on the next row written. This bounds
+audit storage under a flood, but rows above the limit are **not** written
+individually, and an attacker who rotates many source IPs can consume the
+global ceiling and hide other peers' rejects in the suppressed counts.
+`account_inactive` rows bypass the limiter (they need a valid,
+unreplayed signed assertion). Tests:
+`TestDispatch_AuditsFailuresBoundedWithoutTokenData`,
+`TestAuditLimiter_PerIPGlobalAndLRU`, `TestDispatch_InactiveAlwaysAudited`,
+`TestDispatch_CarriesSidAndJti`, `TestResolveUser_JITAuditHasSourceAndSid`,
+`internal/audit/record_test.go` `TestRecord_CarriesConsoleSidAndJti`.
+
 ## Planned controls
 
-- **WebSocket proxying** (SC-7): M5 (POAM-034).
+- **WebSocket proxying** (SC-7): retargeted from M5 to a later
+  milestone (POAM-034).
 - **Console-signed launch nonce** (SC-23/AC-4): M5 (POAM-035).
 - **Audit drop metric and alert** (AU-5): before production (POAM-036).
 - **AU audit retention and SIEM export**: no code (see

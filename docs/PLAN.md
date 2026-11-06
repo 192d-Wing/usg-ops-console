@@ -131,6 +131,14 @@ store) + hyper reverse proxy; tracing → JSON audit stream.
 | M6 | Native modules: home, tool catalog, settings, audit viewer; global search (tools contribute search providers via manifest endpoint) | — |
 | M7 | Helm/Flux deploy to dev cluster, compliance docs, ATO evidence | Gate PASS |
 
+**M5 status (2026-11-05):** implemented with local evidence; not yet
+committed or run in CI. `sdk-js/` and the shared fixture corpus are in this
+repo; finch embedded mode and otter-go console auth mode are on usg-dcim
+branch `feat/console-embed` (uncommitted). Before finch merges, finch must
+re-vendor the SDK from a clean commit (POAM-055). Open items:
+POAM-050 to POAM-057 in [POAM.md](compliance/POAM.md); WebSockets
+(POAM-034) and POAM-045 were moved to a later milestone.
+
 ## 5. Multi-agent workflow (ported from usg-dcim)
 
 Same orchestrator pattern (`.claude/skills/console-workflow/SKILL.md`):

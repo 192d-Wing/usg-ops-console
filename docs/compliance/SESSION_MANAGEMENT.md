@@ -1,6 +1,8 @@
 # Session management
 
-Status as of M4 (tool sessions, per-session idle limit, tool refresh
+Status as of M5 (adds DCIM tool behaviour at session end, local
+evidence only), 2026-11-05. Console session behaviour is unchanged since
+M4 (tool sessions, per-session idle limit, tool refresh
 gating), 2026-11-04. This file describes what the code does today.
 
 **M4 evidence status.** M4 is green in CI run 41892456284. M4 statements
@@ -433,3 +435,38 @@ self-focus after the user returned to the shell does not extend;
 honoured cases: shell click, click into the frame, open dialog), passing
 on chromium, firefox and webkit locally; `tool-security.spec.ts` (refresh
 spam: 0 keepalives).
+
+## Tool behaviour at console session end (DCIM, M5)
+
+DCIM (usg-dcim finch + otter-go, branch `feat/console-embed`,
+**uncommitted**; local evidence only) keeps no session of its own when
+embedded. Its lifetime is bounded by the console session:
+
+- **Gateway side (this repo).** Every proxied `/t/dcim/*` request rechecks
+  the console session as for any tool (above). Once the console session
+  ends (logout, idle or absolute expiry, revocation), the gateway refuses
+  the next request and mints no further assertion.
+- **Assertion bound (~90 s).** An assertion already minted stays
+  acceptable to otter-go until `exp` (60 s after `iat`) plus its leeway
+  (`OTTER_CONSOLE_LEEWAY_SECS`, default and maximum 30 s), and only once
+  per otter-go process (`jti` replay cache, POAM-052). The browser never
+  receives the assertion; only a party on the internal hop could hold one
+  (POAM-053).
+- **Account deactivation in DCIM.** otter-go caches the `sub`-to-user
+  lookup for active accounts for 15 s; a deactivation can take up to 15 s
+  to apply (POAM-051). Inactive accounts are re-read on every request.
+- **finch UI.** finch in embedded mode stores no token (no
+  `Authorization`, no localStorage). On a 401 from its API it does not
+  call `/auth/refresh` or redirect to a login page; it shows a
+  session-ended view (`data-testid="session-ended"`), sends one console
+  notification ("session ended" warning) and moves focus to the heading.
+  "Retry session" sends `RequestSessionRefresh` (subject to the shell's
+  refresh gating above), waits for `SessionRefreshed` (5 s), and re-checks
+  `/auth/me` for `auth_mode: "console"`.
+
+Tests: otter-go `TestConsoleVerify_Rejections` (expired, TTL),
+`TestConsoleVerify_Replay`, `TestDispatch_InactiveAuditedAndNotCached`;
+finch `src/lib/embedded.session.test.ts`,
+`src/lib/auth-provider.check-fail.test.ts`; E2E (local, `DCIM_REPO` only)
+`e2e/tests/dcim-ux.spec.ts` (forced 401: console flashbar "DCIM session
+ended", focus on `#session-ended-heading`, retry recovers without reload).

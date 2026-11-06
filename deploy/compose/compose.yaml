@@ -104,6 +104,8 @@ services:
       CONSOLE_TLS_PORT_TOOL_EVIL: ${CONSOLE_TLS_PORT_TOOL_EVIL:?use --env-file deploy/compose/ports.env}
       CONSOLE_TLS_PORT_TOOL_RUN: ${CONSOLE_TLS_PORT_TOOL_RUN:?use --env-file deploy/compose/ports.env}
       CONSOLE_TLS_PORT_TOOL_IDLE: ${CONSOLE_TLS_PORT_TOOL_IDLE:?use --env-file deploy/compose/ports.env}
+      CONSOLE_TLS_PORT_TOOL_DCIM: ${CONSOLE_TLS_PORT_TOOL_DCIM:?use --env-file deploy/compose/ports.env}
+      CONSOLE_TLS_PORT_TOOL_DCIM_RUN: ${CONSOLE_TLS_PORT_TOOL_DCIM_RUN:?use --env-file deploy/compose/ports.env}
       CONSOLE_TLS_PORT_PRODLIKE: ${CONSOLE_TLS_PORT_PRODLIKE:?use --env-file deploy/compose/ports.env}
       CONSOLE_GW_PORT_PRODLIKE: ${CONSOLE_GW_PORT_PRODLIKE:?use --env-file deploy/compose/ports.env}
     extra_hosts:
@@ -123,6 +125,8 @@ services:
       - "127.0.0.1:${CONSOLE_TLS_PORT_TOOL_EVIL}:${CONSOLE_TLS_PORT_TOOL_EVIL}"     # tool origin evil (main gateway)
       - "127.0.0.1:${CONSOLE_TLS_PORT_TOOL_RUN}:${CONSOLE_TLS_PORT_TOOL_RUN}"     # tool origin hello (make run)
       - "127.0.0.1:${CONSOLE_TLS_PORT_TOOL_IDLE}:${CONSOLE_TLS_PORT_TOOL_IDLE}"     # tool origin evil (idle gateway)
+      - "127.0.0.1:${CONSOLE_TLS_PORT_TOOL_DCIM}:${CONSOLE_TLS_PORT_TOOL_DCIM}"     # tool origin dcim (main gateway)
+      - "127.0.0.1:${CONSOLE_TLS_PORT_TOOL_DCIM_RUN}:${CONSOLE_TLS_PORT_TOOL_DCIM_RUN}"     # tool origin dcim (make run)
       - "127.0.0.1:${CONSOLE_TLS_PORT_PRODLIKE}:${CONSOLE_TLS_PORT_PRODLIKE}"     # prodlike *.ops.test (CI)
     healthcheck:
       test: ["CMD-SHELL", "nc -z 127.0.0.1 $$CONSOLE_TLS_PORT_MAIN"]

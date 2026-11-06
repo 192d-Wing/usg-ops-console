@@ -26,6 +26,31 @@
       {
         "name": "hello:user",
         "description": "M4 E2E: required by the hello/evil registry tools (deploy/compose/tools/registry.*.toml)"
+      },
+      {
+        "name": "dcim:viewer",
+        "description": "M5: required by the dcim registry tool (visibility gate); otter-go maps via oidc_role_mappings"
+      },
+      {
+        "name": "dcim:operator",
+        "description": "M5: dcim operator (composite of dcim:viewer)",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "dcim:viewer"
+          ]
+        }
+      },
+      {
+        "name": "dcim:admin",
+        "description": "M5: dcim admin (composite of dcim:operator, hence dcim:viewer)",
+        "composite": true,
+        "composites": {
+          "realm": [
+            "dcim:operator",
+            "dcim:viewer"
+          ]
+        }
       }
     ]
   },
@@ -342,6 +367,56 @@
       ],
       "realmRoles": [
         "console-user"
+      ]
+    },
+    {
+      "username": "dcim_viewer",
+      "email": "dcim_viewer@console.dev.invalid",
+      "firstName": "Dcim",
+      "lastName": "Viewer",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "attributes": {
+        "dev_only": [
+          "DEV ONLY test user (dcim viewer only: cannot perform operator writes); password dev-only-dcim_viewer; never import outside local compose"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-dcim_viewer",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "console-user",
+        "dcim:viewer"
+      ]
+    },
+    {
+      "username": "dcim_operator",
+      "email": "dcim_operator@console.dev.invalid",
+      "firstName": "Dcim",
+      "lastName": "Operator",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "attributes": {
+        "dev_only": [
+          "DEV ONLY test user (dcim operator via composite); password dev-only-dcim_operator; never import outside local compose"
+        ]
+      },
+      "credentials": [
+        {
+          "type": "password",
+          "value": "dev-only-dcim_operator",
+          "temporary": false
+        }
+      ],
+      "realmRoles": [
+        "console-user",
+        "dcim:operator"
       ]
     }
   ],

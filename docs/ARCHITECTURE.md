@@ -1,4 +1,4 @@
-# Architecture (current state, M4.5)
+# Architecture (current state, M5)
 
 This describes what is built today. The target design and the milestones are
 in [PLAN.md](PLAN.md). M3 added Keycloak OIDC sign-in, server-side
@@ -15,6 +15,13 @@ a "calm neutral" token set, a collapsible icon rail, a Ctrl/Cmd+K command
 palette and a breadcrumb scope switcher. Routes, contracts, the CSP and SDK
 protocol v1 are unchanged. **M4.5 has local evidence only; CI has not run
 this change yet.**
+
+M5 (2026-11-05) added `sdk-js` (a TypeScript mirror of the SDK, vendored
+into tools), a shared protocol fixture corpus, and the first real tool:
+DCIM (usg-dcim finch + otter-go) registered in the dev registries.
+Protocol v1 and the gateway are unchanged apart from tests. **M5 has
+local evidence only; CI has not run it, and the DCIM side lives in the
+usg-dcim repository, uncommitted.**
 
 ## Crates
 
@@ -404,6 +411,38 @@ c=128 is pool-bound by design (pool 32). Tail overhead p99 is computed as
 the difference of two p99 values, so it can be smaller than p50.
 `assertion.sign` p99 stayed at or below 174 µs at c<=32.
 
+### DCIM tool (M5)
+
+```text
+ shell iframe --> dcim tool origin (gateway) --/t/dcim/*--> finch nginx --/api/--> otter-go --> DCIM Postgres
+                  session + role dcim:viewer    (http, loopback  (strips /t/dcim,  (console auth
+                  + X-Console-Assertion          in dev)           SPA, /_console   mode)
+                                                                   -> 404)
+```
+
+- **Registry**: `dcim` in `deploy/compose/tools/registry.main.toml` and
+  `registry.run.toml` (own origin, `required_roles = ["dcim:viewer"]`,
+  `forward_roles = ["dcim:"]`, `scopes = ["site"]`, `audit_writes`,
+  `forward_headers = ["x-dcim-csrf"]`). Not in the idle or prodlike
+  registries. If the upstream is down, only `/t/dcim/*` fails (502).
+- **finch (embedded mode)**: detects embedding only if `connect()`
+  returns a bridge and `/auth/me` reports `auth_mode: "console"`; then it
+  hides its own navigation and fabric picker, sends title, breadcrumbs,
+  path and notifications through the SDK, maps the console `site` to a
+  fabric by slug, sends no `Authorization` header and stores no token.
+  Built with `VITE_BASE=/t/dcim/`.
+- **otter-go (console auth mode)**: verifies the gateway assertion (JWKS
+  from the gateway), keeps a per-process `jti` replay cache, links users
+  by `sub`, maps `dcim:` roles to capabilities through its own
+  `oidc_role_mappings` plus per-user grants, and requires
+  `X-DCIM-CSRF: 1` on writes. Details:
+  [NIST_800-53_MAPPING.md](compliance/NIST_800-53_MAPPING.md#tool-side-controls-dcim-otter-go-console-auth-mode-m5),
+  config: [DEPLOYMENT.md](DEPLOYMENT.md#dcim-tool-usg-dcim-m5).
+- **sdk-js** (`sdk-js/`): zero-dependency TypeScript, vendored as one
+  file with a version/source/sha256 header; passes the shared corpus
+  `crates/console-protocol/tests/fixtures/MANIFEST.json` that the Rust
+  crates also run ([INTEGRATING-A-TOOL.md](INTEGRATING-A-TOOL.md#javascript-tools-sdk-js-m5)).
+
 ### Gateway HTTP contract
 
 Public routes (no session): `GET /healthz`, `GET /login`,
@@ -629,6 +668,7 @@ the IdP blackhole proxy; it renders the tool registries into
 | `idle-*` (M4 adds) | idle gateway + tool origin 9453 | `idle-tool.spec.ts` |
 | `ka503-chromium`, `ka503-firefox`, `ka503-webkit` | KA503 gateway | `keepalive-503.spec.ts` |
 | M4.5 additions to the main projects | main | `rail.spec.ts`, `palette.spec.ts`; `idle.spec.ts` gains idle-over-palette cases |
+| M5 additions to the main projects, only with `DCIM_REPO` (local, never CI) | main + DCIM origin 9454 | `dcim`, `dcim-security`, `dcim-a11y`, `dcim-ux` (stack from `e2e/servers/dcim-stack.mjs`) |
 | `prodlike-chromium` | prodlike gateway (env `E2E_PRODLIKE=1`; `--host-resolver-rules` locally, `/etc/hosts` in CI) | `prodlike.spec.ts` |
 
 Helpers: `auth-helpers.ts` (Keycloak login), `db-helpers.ts` (audit
@@ -649,6 +689,12 @@ tests (R2-D1, WCAG 1.4.13). Fixes round 3 changed the CSS and added a wasm
 test (`rail_collapsed_keeps_text_names`) that checks computed visibility,
 but the E2E suite has **not** been re-run after round 3, and CI has not
 run M4.5.
+
+M5 local runs (QA U6 round 3): dcim specs 39 passed / 5 skipped
+(Chromium, WebKit), 16 passed / 1 timeout then 4/4 on repeat (Firefox,
+Linux container); suite without `DCIM_REPO` 377 passed, 0 failed, 39
+skipped (Chromium, WebKit, idle, ka503, dist). Full-suite Firefox was not
+run. CI has not run M5.
 
 ## Compliance
 

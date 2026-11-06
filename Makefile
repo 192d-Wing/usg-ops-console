@@ -1,4 +1,4 @@
-.PHONY: check fmt lint test web web-gallery check-no-gallery wasm-test gateway run deny audit image e2e e2e-install e2e-typecheck up down down-clean compose-config test-integration ports-free dev-secrets tools-registries hello hello-web hello-server bench-proxy e2e-linux
+.PHONY: check fmt lint test web web-gallery web-run check-no-gallery wasm-test gateway run deny audit image e2e e2e-install e2e-typecheck up down down-clean compose-config test-integration ports-free dev-secrets tools-registries hello hello-web hello-server bench-proxy e2e-linux
 
 check: fmt lint test web web-gallery check-no-gallery deny
 
@@ -161,7 +161,15 @@ bench-proxy: gateway hello up
 # Sign in as console_user / dev-only-console_user.
 # The hello tool is at https://localhost:$(CONSOLE_TLS_PORT_TOOL_RUN) (service
 # menu); its server runs in the background and stops with the gateway.
-run: web-gallery hello up
+# `make run` serves its own copy of the shell (dist-run). The gateway pins the
+# CSP to index.html's inline-script hash at startup, so a rebuild of the
+# shared dist-gallery by `make e2e`/`make check` while the stack runs would
+# leave it serving a page its CSP blocks (blank screen). Restart `make run`
+# to pick up new shell code.
+web-run:
+	cd crates/console-shell && trunk build --release --features gallery --dist dist-run
+
+run: web-run hello up
 	HELLO_LISTEN=127.0.0.1:$(CONSOLE_PORT_HELLO_UPSTREAM) HELLO_TOOL_IDS=hello HELLO_EVIL_ID= \
 	CONSOLE_ISSUER=https://localhost:$(CONSOLE_TLS_PORT_RUN) CONSOLE_JWKS_URL=http://127.0.0.1:$(CONSOLE_GW_PORT_RUN)/.well-known/jwks.json \
 	./target/release/hello-tool-server & hello=$$!; \
@@ -169,7 +177,7 @@ run: web-gallery hello up
 	set -a && . ./$(GATEWAY_ENV) && set +a && \
 	CONSOLE_LISTEN=127.0.0.1:$(CONSOLE_GW_PORT_RUN) CONSOLE_PUBLIC_URL=https://localhost:$(CONSOLE_TLS_PORT_RUN) \
 	CONSOLE_TOOLS_REGISTRY_FILE=$(TOOLS_OUT)/registry.run.toml CONSOLE_ASSERTION_KEY_FILE=$(ASSERTION_KEY) \
-	CONSOLE_TOOL_SESSION_HMAC_KEY_FILE=$(TOOL_SID_KEY) \
+	CONSOLE_TOOL_SESSION_HMAC_KEY_FILE=$(TOOL_SID_KEY) CONSOLE_DIST=crates/console-shell/dist-run \
 	cargo run -p console-gateway
 
 deny:
@@ -180,3 +188,7 @@ audit:
 
 image:
 	podman build -f deploy/Containerfile -t usg-ops-console:dev .
+
+.PHONY: sdk-js-test
+sdk-js-test:
+	cd sdk-js && npm ci --ignore-scripts && npm run typecheck && npm test

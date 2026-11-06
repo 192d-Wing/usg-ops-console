@@ -1,0 +1,19 @@
+{
+  "name": "@usg-ops-console/sdk-js",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Zero-runtime-dependency TypeScript SDK for usg-ops-console tools (protocol v1).",
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "vendor": "node scripts/vendor.mjs"
+  },
+  "devDependencies": {
+    "typescript": "7.0.2",
+    "vitest": "5.1.0"
+  }
+}

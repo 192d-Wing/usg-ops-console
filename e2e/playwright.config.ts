@@ -102,6 +102,21 @@ const IDLE = /idle[^/]*\.spec\.ts$/;
 const KA503 = /keepalive-503\.spec\.ts$/;
 const PROD = /prodlike\.spec\.ts$/;
 const SETUP = /auth\.setup\.ts$/;
+// M5 (plan U6): finch + otter-go E2E, LOCAL ONLY, only when DCIM_REPO points
+// at a usg-dcim checkout (brief Q9). Without DCIM_REPO these specs are ignored
+// and no dcim server starts, so the suite is exactly the pre-M5 one.
+const DCIM_REPO = process.env.DCIM_REPO;
+const DCIM_SPECS = /dcim[^/]*\.spec\.ts$/;
+/** dev realm password-login acr (DEV ONLY); otter-go requires it in console mode. */
+export const DCIM_REQUIRED_ACR = "urn:usg-ops-console:dev:password";
+/** dcim tool origin (main gateway) and its loopback-only upstreams (never browser-facing). */
+export const DCIM = {
+  enabled: Boolean(DCIM_REPO),
+  origin: tls("TOOL_DCIM"),
+  finchDirect: `http://127.0.0.1:${port("CONSOLE_PORT_DCIM_UPSTREAM")}`,
+  otterDirect: `http://127.0.0.1:${port("CONSOLE_PORT_DCIM_API")}`,
+  assertionLog: `${resolve(import.meta.dirname, "..")}/target/e2e-dcim/log/assertions.log`,
+} as const;
 /** One storageState per engine, written by that engine's own setup project. */
 export const storageStateFor = (engine: string) => `.auth/console_user-${engine}.json`;
 const isCI = Boolean(process.env.CI);
@@ -190,7 +205,7 @@ export default defineConfig({
       const authed = { storageState: storageStateFor(b) };
       return [
         { name: setup, testMatch: SETUP, use: { ...dev } },
-        { name: b, testIgnore: [SMOKE, IDLE, SETUP, KA503, PROD], dependencies: [setup], use: { ...dev, ...authed } },
+        { name: b, testIgnore: [SMOKE, IDLE, SETUP, KA503, PROD, ...(DCIM_REPO ? [] : [DCIM_SPECS])], dependencies: [setup], use: { ...dev, ...authed } },
         { name: `idle-${b}`, testMatch: IDLE, use: { ...dev, baseURL: ORIGINS.idle } },
         { name: `ka503-${b}`, testMatch: KA503, use: { ...dev, baseURL: ORIGINS.ka503 } },
         { name: `dist-${b}`, testMatch: SMOKE, dependencies: [setup], use: { ...dev, ...authed, baseURL: ORIGINS.dist } },
@@ -266,5 +281,30 @@ export default defineConfig({
     // its loopback peer is untrusted and any X-Forwarded-For must be ignored.
     gateway(gw("RL"), ORIGINS.main, "../crates/console-shell/dist-gallery", { CONSOLE_TRUSTED_PROXIES: "127.0.0.1/32" }),
     gateway(gw("RL_UNTRUSTED"), ORIGINS.main, "../crates/console-shell/dist-gallery", { CONSOLE_TRUSTED_PROXIES: "" }),
+    // M5: dcim Postgres + otter-go (console mode, main gateway JWKS) + finch/nginx.
+    ...(DCIM_REPO
+      ? [
+          {
+            command: "node servers/dcim-stack.mjs",
+            // Through nginx to otter-go: a leftover nginx alone answers 502, not ready.
+            url: `${DCIM.finchDirect}/api/v1/auth/methods`,
+            env: {
+              DCIM_REPO,
+              CONSOLE_PORT_DCIM_PG: String(port("CONSOLE_PORT_DCIM_PG")),
+              CONSOLE_PORT_DCIM_API: String(port("CONSOLE_PORT_DCIM_API")),
+              CONSOLE_PORT_DCIM_UPSTREAM: String(port("CONSOLE_PORT_DCIM_UPSTREAM")),
+              DCIM_CONSOLE_ISSUER: ORIGINS.main,
+              DCIM_CONSOLE_JWKS_URL: `${ORIGINS.mainDirect}/.well-known/jwks.json`,
+              DCIM_REQUIRED_ACR,
+              ...(process.env.DCIM_SKIP_FINCH_BUILD ? { DCIM_SKIP_FINCH_BUILD: process.env.DCIM_SKIP_FINCH_BUILD } : {}),
+            },
+            reuseExistingServer: !isCI,
+            // First run: go build + npm run build + image pulls.
+            timeout: 600_000,
+            stdout: "pipe" as const,
+            stderr: "pipe" as const,
+          },
+        ]
+      : []),
   ],
 });

@@ -311,6 +311,30 @@ pub(crate) mod tests {
         );
     }
 
+    /// Wire format tools (otter-go) verify: `jti` is 22-char b64url (128
+    /// bits), unique per mint; `acr` is the session's id_token acr and is
+    /// omitted (not null) when the session has none.
+    #[test]
+    fn jti_unique_and_acr_wire_format() {
+        let keys = AssertionKeys::from_pem(TEST_KEY, None, None).unwrap();
+        let now = jsonwebtoken::get_current_timestamp();
+        let payload = |tok: &str| -> serde_json::Value {
+            let p = tok.split('.').nth(1).unwrap();
+            serde_json::from_slice(&B64URL.decode(p).unwrap()).unwrap()
+        };
+        let a = payload(&keys.sign(&claims(now)).unwrap());
+        let b = payload(&keys.sign(&claims(now)).unwrap());
+        let jti = a["jti"].as_str().unwrap();
+        assert_eq!(jti.len(), 22);
+        assert!(B64URL.decode(jti).is_ok_and(|d| d.len() == 16));
+        assert_ne!(a["jti"], b["jti"]);
+        assert_eq!(a["acr"], "urn:test:cac");
+        assert_eq!(a["exp"].as_u64().unwrap() - a["iat"].as_u64().unwrap(), 60);
+        let mut c = claims(now);
+        c.acr = None;
+        assert!(payload(&keys.sign(&c).unwrap()).get("acr").is_none());
+    }
+
     #[test]
     fn jwks_publishes_rotation_keys_and_kid_is_thumbprint() {
         let keys = AssertionKeys::from_pem(TEST_KEY, Some(OTHER_PUB), None).unwrap();

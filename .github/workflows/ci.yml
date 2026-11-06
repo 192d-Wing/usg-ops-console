@@ -259,6 +259,21 @@ jobs:
         if: always()
         run: $COMPOSE $COMPOSE_ENV $COMPOSE_FILES down -v
 
+  sdk-js:
+    name: sdk-js typecheck + vitest + npm audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: sdk-js/package-lock.json
+      - run: make sdk-js-test
+      - name: npm audit (fail on high/critical)
+        run: npm audit --audit-level=high
+        working-directory: sdk-js
+
   supply-chain:
     name: cargo-deny
     runs-on: ubuntu-latest

@@ -1,7 +1,8 @@
 # Audit logging
 
-Status as of M4 (tool events, registry events, background audit queue),
-2026-11-04. This file describes what the code does today. M4 is green in
+Status as of M5 (adds tool-side DCIM records), 2026-11-05; console
+records unchanged since M4 (tool events, registry events, background
+audit queue), 2026-11-04. This file describes what the code does today. M4 is green in
 CI run 41892456284; M4 statements also cite local runs (`make
 test-integration` 99 passed; Playwright macOS 294 passed, Linux container
 428 passed / 3 flaky, POAM-044).
@@ -217,6 +218,60 @@ inserted in batches of 200 (`AuditSink::record_many`, one
 `INSERT ... SELECT FROM UNNEST`). Each event still gets its own JSON line.
 A failed batch write is logged and not retried, because the sessions are
 already deleted (POAM-016). Test: `pg_sweeper_deletes_and_audits`.
+
+## Tool-side records: DCIM (otter-go, M5)
+
+These records are written by otter-go (usg-dcim `packages/otter-go`,
+branch `feat/console-embed`, **uncommitted**) into **its own**
+`audit_log` table, not into the console's `audit_events`. Evidence is
+local unit tests only; CI has not run them. The gateway still writes its
+own `tool.access` / `tool.request` rows for the same requests (DCIM has
+`audit_writes = true` in the dev registries).
+
+| Event | When | `success` | Key fields |
+| --- | --- | --- | --- |
+| `auth.console_reject` | Any assertion rejection (401 or 503, including a missing assertion in console mode) and any inactive-account 403 | false | `actor_ip` = TCP peer; `actor_user_id` only for `account_inactive`; metadata `reason`, `method: "console"`, optional `suppressed`, `upstream_issuer` |
+| `auth.console_jit_create` | First console request for a `sub` with no linked account | true | `actor_user_id` = new user; `actor_ip`; metadata `sid`, `jti` (from the assertion), `method`, `upstream_issuer` |
+
+`reason` is a fixed string, never token or claim content: `missing`,
+`bearer_with_assertion`, `too_large`, `bad_header`, `unknown_kid`,
+`bad_claims`, `ttl_too_long`, `acr_mismatch`, `replay`,
+`replay_cache_full`, `console jwks unavailable`
+(`internal/auth/consolejwks.go`), or `account_inactive`
+(`internal/auth/console.go`).
+
+Rate limit (AU-4 / AU-5 trade-off): non-`account_inactive` reject rows are
+limited to 10 per 10 s per source IP (LRU of 4096 IPs) and 100 per 10 s
+overall. Rows over the limit are not written; they are counted per reason
+and attached to the next row written as `suppressed: {"<reason>": n}`
+(an object, not an integer). `account_inactive` rows are always written
+and also flush pending counts. A rejected request over the limit is
+still logged to the process log (slog, reason only).
+
+Metadata on other otter-go audit rows: when the request was authenticated
+through a console assertion, `audit.Record` adds `console_sid` (the
+assertion's per-tool `sid` pseudonym, not the console session id) and
+`console_jti` (the assertion `jti`) to a copy of the row's metadata.
+`upstream_issuer` is set on the console auth rows above when
+`OTTER_CONSOLE_UPSTREAM_ISSUER` is configured.
+
+Example (`auth.console_reject`, illustrative values):
+
+```json
+{"action":"auth.console_reject","success":false,"target_type":"auth",
+ "actor_label":"anonymous","actor_ip":"10.0.4.17",
+ "metadata":{"reason":"replay","method":"console",
+             "suppressed":{"bad_claims":3}}}
+```
+
+Write failures are logged (`audit_write_failed`) and do not fail the
+request (best effort, same weakness class as POAM-016 on the console
+side). Tests: `TestDispatch_AuditsFailuresBoundedWithoutTokenData`,
+`TestAuditLimiter_PerIPGlobalAndLRU`, `TestDispatch_InactiveAlwaysAudited`,
+`TestDispatch_InactiveAuditedAndNotCached`, `TestDispatch_CarriesSidAndJti`,
+`TestResolveUser_JITAuditHasSourceAndSid`
+(`internal/auth/console_fix_test.go`), `TestRecord_CarriesConsoleSidAndJti`
+(`internal/audit/record_test.go`).
 
 ## Retention and SIEM export
 

@@ -44,7 +44,7 @@ check-no-gallery and deny.
 | `make down` | Stops and removes the compose stack (volumes kept) |
 | `make down-clean` | Same, and deletes the volumes (`down -v`) |
 | `make ports-free` | Fails fast, naming the busy ports, if a TLS port from `deploy/compose/ports.env` is in use. Override ports from the environment |
-| `make run` | Builds `web-gallery`, runs `up`, then the gateway on the host with `deploy/compose/gateway.env.example`. Browse <https://localhost:9442> and sign in as `console_user` / `dev-only-console_user` |
+| `make run` | Builds the gallery shell into `dist-run` (`make web-run`), runs `up`, then the gateway on the host with `deploy/compose/gateway.env.example`. Browse <https://localhost:9442> and sign in as `console_user` / `dev-only-console_user` |
 | `make test-integration` | Gateway tests including the Postgres `pg_flow` tests, against the compose Postgres (`CONSOLE_TEST_DATABASE_URL`). Without a DB those tests print `NOT RUN` |
 | `make wasm-test` | console-ui and console-shell browser tests with wasm-pack (headless Firefox by default; `WASM_BROWSER=chrome` to override). Not part of `make check` |
 | `make e2e-install` | `npm ci` in `e2e/` and installs Playwright browsers (chromium, firefox, webkit) |

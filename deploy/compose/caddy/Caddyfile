@@ -49,6 +49,13 @@ https://localhost:{$CONSOLE_TLS_PORT_TOOL_HELLO}, https://localhost:{$CONSOLE_TL
 https://localhost:{$CONSOLE_TLS_PORT_TOOL_RUN} {
 	import gw {$CONSOLE_GW_PORT_RUN}
 }
+# M5 dcim tool origins: main gateway (E2E) and run gateway (make run).
+https://localhost:{$CONSOLE_TLS_PORT_TOOL_DCIM} {
+	import gw {$CONSOLE_GW_PORT_MAIN}
+}
+https://localhost:{$CONSOLE_TLS_PORT_TOOL_DCIM_RUN} {
+	import gw {$CONSOLE_GW_PORT_RUN}
+}
 # evil tool origin of the IDLE gateway (idle-tool.spec.ts, SEC-002).
 https://localhost:{$CONSOLE_TLS_PORT_TOOL_IDLE} {
 	import gw {$CONSOLE_GW_PORT_IDLE}

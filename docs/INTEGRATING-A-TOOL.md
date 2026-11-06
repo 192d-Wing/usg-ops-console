@@ -119,7 +119,15 @@ ignored):
 | `sid` | Per-session, per-tool pseudonym (HMAC, 16 bytes base64url). Stable within one console session for your tool; not linkable across tools; not the console session id |
 | `jti` | 128-bit random, unique per request |
 | `iat`, `nbf`, `exp` | `nbf = iat`, `exp = iat + 60` |
-| `acr` | Authentication context from the session, when present |
+| `acr` | Authentication context from the session's id_token. **Omitted** (never `null`) when the session has none |
+
+`acr` values: the dev realm emits `urn:usg-ops-console:dev:password`
+(DEV ONLY, `deploy/compose/gateway.env.example`). The production value is
+the icam CAC/PIV `acr`, not yet confirmed (POAM-028). A tool that pins
+`acr` must treat a **missing** `acr` as a rejection, not as a match. Test:
+`assertion::tests::jti_unique_and_acr_wire_format` (22-character
+base64url `jti`, unique per mint; `acr` absent from the payload when the
+session has none; `exp - iat = 60`).
 
 ### Verification rules
 
@@ -154,6 +162,18 @@ The hello-tool reference verifier is
 `examples/hello-tool/server/src/assertion.rs` (tests
 `cold_cache_fetch_is_single_flight`, `serves_last_good_keys_then_fails_closed`,
 `oversized_jwks_is_refused`).
+
+**Go reference (otter-go).** The first non-Rust verifier is otter-go's
+console auth mode in usg-dcim (`packages/otter-go/internal/auth/console.go`
+and `consolejwks.go`, branch `feat/console-embed`, uncommitted). Use it as
+the Go reference: `golang-jwt/jwt` v5 with `WithValidMethods(["ES256"])`,
+`typ` and non-empty `kid` checks, single-string `aud`, required
+`exp`/`nbf`/`iat` with leeway at most 30 s, `exp - iat <= 60`, a required
+`acr` allow-list, a bounded `jti` replay cache that fails closed when
+full, and a JWKS cache with the limits above (https required off
+loopback). Its tests (`internal/auth/console_test.go`,
+`console_fix_test.go`) list the rejection cases to copy. Its replay cache
+is per process (POAM-052).
 
 **Supply-chain note.** The hello-tool server verifies with `jsonwebtoken`
 (`rust_crypto` backend), which pulls in `crypto-bigint` 0.5 with advisory
@@ -416,6 +436,49 @@ Rules carried over from M3 (INT-007, INT-008, POAM-025):
   frame another tool's launch URL with a code minted for the attacker's own
   session. A console-signed nonce bound to the shell frame is planned for
   M5 (POAM-035).
+
+## JavaScript tools (`sdk-js`, M5)
+
+`sdk-js/` is a zero-runtime-dependency TypeScript mirror of
+`console-protocol` / `console-sdk` (SDK 0.1.0, protocol 1). It is not
+published to a registry; tools vendor one generated file. Details and a
+React example: [sdk-js/README.md](../sdk-js/README.md).
+
+- **Vendoring.** From a clean, committed checkout:
+  `cd sdk-js && npm ci && node scripts/vendor.mjs <tool>/src/vendor/console-sdk`.
+  It writes `console-sdk.ts`, `check.mjs` + `check.d.mts`, and
+  `fixtures/` (a copy of the shared corpus). Do not edit vendored files;
+  re-run the script.
+- **Header.** The first line of `console-sdk.ts` is
+  `// @usg-ops-console/sdk-js <ver> protocol=1 source=<git sha> sha256=<digest>`,
+  where the digest covers everything after that line.
+- **Compat test.** In the tool, call
+  `verifyVendoredSdk(src, { protocol: 1, version: "0.1.0" })` from the
+  vendored `check.mjs`, then run each `fixtures/MANIFEST.json`
+  `sdk-message` entry through the vendored codec.
+  `verifyVendoredSdk` rejects a `source` of `unknown` or one ending in
+  `+dirty` unless `{ allowDirty: true }` is passed; `vendor.mjs` prints a
+  warning in that case. Use `allowDirty` only for local experiments, never
+  in a committed compat test (finch's current vendored copy is `+dirty`;
+  POAM-055).
+- **`connect()`.** Fetches same-origin `GET /_console/context` to pin the
+  console origin; resolves `null` (run standalone) when the page is not
+  framed, the fetch fails, the context is invalid, or the fetch exceeds
+  `contextTimeoutMs` (default `CONTEXT_TIMEOUT_MS` = 2000 ms, the same
+  fallback as Rust `console-sdk`). Confirm embedded mode with your
+  backend as well (finch requires `/auth/me` to report
+  `auth_mode: "console"`).
+- **Base path.** The gateway serves the tool under `/t/<id>/` and passes
+  the path through unchanged. Build assets, router basename and API base
+  for that prefix (finch: `VITE_BASE=/t/dcim/ npm run build`, router
+  `basename="/t/dcim"`, API `/t/dcim/api/v1`), and strip the prefix
+  before `pathChanged` and before validating incoming `Navigate` paths.
+  The prefix is tied to the registry id at build time. Plain `href`
+  links outside the router lose the prefix when opened in a new tab
+  (finch: POAM-057).
+- Evidence: `make sdk-js-test` (typecheck, vitest 82/82, including the 58
+  shared `MANIFEST.json` entries and the vendored-codec re-run). A CI job
+  `sdk-js` is defined but has not run yet.
 
 ## Checklist for a new tool
 

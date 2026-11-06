@@ -2,6 +2,7 @@
 /dist
 crates/console-shell/dist
 crates/console-shell/dist-gallery
+crates/console-shell/dist-run
 .agent-runs/
 .DS_Store
 
