@@ -131,6 +131,9 @@ test.describe("session fixation and rotation (SC-23)", () => {
   test("re-login rotates the session id and the old id is dead", async ({ page, baseURL, context, playwright }) => {
     await loginVia(page, baseURL!, "/");
     const first = (await sidCookie(context))!.value;
+    // Leave the live shell first: Firefox aborts a goto that races its startup
+    // navigation (NS_BINDING_ABORTED), same pattern as the CSRF test below.
+    await page.goto("about:blank");
     await page.goto("/login?return_to=%2F");
     await page.waitForURL((u) => u.origin === new URL(baseURL!).origin && u.pathname === "/");
     const second = (await sidCookie(context))!.value;
